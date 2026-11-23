@@ -1,5 +1,5 @@
 [project]
-name = "decision-cards"
+name = "crossroads"
 version = "1.0.0"
 description = "Five evidence-graded engineering decision cards with stdlib reference implementations, an authoring schema, and the depth gate that enforces it"
 readme = "README.md"

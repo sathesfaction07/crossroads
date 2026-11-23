@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Public-edition guard for the decision-cards corpus.
+"""Public-edition guard for the crossroads corpus.
 
 validate_cards.py is the depth gate (section size, generated ledger, edges,
 evidence vocabulary). This guard covers the classes that gate does not:
