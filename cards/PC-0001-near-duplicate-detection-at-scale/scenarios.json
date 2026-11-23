@@ -1,0 +1,257 @@
+{
+  "_comment": "Consumer scenarios for PC-0001. These test the card's PURPOSE (can a consumer reach the right decision from it?) rather than its shape -- and unlike the 200-char section minimum, cannot be satisfied by padding. Two halves: (a) STATICALLY GATED -- every rubric expectation must resolve to a real element of card.json, so a rubric cannot demand something the card does not contain; (b) RECORDED -- the `observed` block holds an actual run. Each observed run MUST carry `conditions`, because a result without its conditions is not comparable to the next one, and comparability over time is the entire value of a fixture.",
+  "provenance": {
+    "authored_by": "user-authored, external to the card author",
+    "caveat_stated_by_author": "scenarios were written with knowledge of the card; an independently-authored scenario would be a harsher test. Sample size 2, sonnet-class consumer.",
+    "consumer_input": "card.json ONLY -- no CARD.md, no repo access. Per-run `conditions` are authoritative; this field states the fixture-wide intent.",
+    "why_externally_run": "The card's author cannot produce a naive consumer run: any agent the author delegates to inherits the authoring conversation, which contains the expected answers. Naive baselines must come from outside. This is a structural property of the fixture, not a convenience -- hence `consumer_prior_exposure` is a required condition."
+  },
+  "scenarios": [
+    {
+      "id": "SC-01-planning-800k-products",
+      "kind": "planning",
+      "prompt": "We have 800,000 product descriptions. SHA-256 dedup runs clean, but support keeps finding duplicate listings. An engineer proposes: compute pairwise cosine over all descriptions, union-find the pairs above 0.8 into duplicate groups, and keep the first item in each group. Produce a plan.",
+      "seeded_traps": [
+        {
+          "trap": "all-pairs scan at N=800k",
+          "detected_via": "decomposition edge 2 requires 1 -- 'scoring without blocking IS the naive algorithm'"
+        },
+        {
+          "trap": "union-find over similar pairs",
+          "detected_via": "anti_pattern A1 + its diagnostic formula"
+        },
+        {
+          "trap": "keep-first survivor",
+          "detected_via": "anti_pattern A3 + the 4 conflicts-with greedy-keep-first edge"
+        },
+        {
+          "trap": "SHA-256 'runs clean' is a red herring",
+          "detected_via": "recognition_signals: exact-hash dedup clean but duplicates persist"
+        }
+      ],
+      "rubric": {
+        "must_identify_from": "recognition_signals",
+        "must_quantify_naive_cost_from": "cost_model.wall_clock",
+        "must_flag_anti_patterns": [
+          "A1",
+          "A3"
+        ],
+        "must_flag_naive_scan_via_edge": {
+          "from": 2,
+          "to": 1
+        },
+        "must_select_shape": "A",
+        "must_flag_unanswered_prerequisite_shape": "C",
+        "must_cite_constraints": [
+          "C3"
+        ],
+        "must_build_monitoring_from": "A5",
+        "must_separate_evidence_classes": true,
+        "hard_credit": [
+          "computes the candidate-pair reduction for N=800,000 instead of carrying C2's fixture figure, and notes the direction -- the factor GROWS with N, so the 80-document value UNDERSTATES the benefit at this scale rather than overstating it",
+          "chooses num_perm so that the required similarity threshold lands on or beside a reachable knee (C3), rather than picking a threshold first and silently accepting whichever knee the band/row split produces (A4)",
+          "does not present C1's fixture recall as an expected recall for 800,000 products -- the card records this exact over-generalisation having already happened in practice",
+          "treats union-find output as single-linkage and transitive (A1) and reports cluster-shape diagnostics rather than a bare duplicates-removed count (A5), which looks identical for a clean run and a chaining catastrophe"
+        ]
+      },
+      "scoring_notes": "This scenario is the MIRROR of SC-02. At N=800,000 the corpus is far above the card's 5000-item breakpoint, so LSH is appropriate and 'should we use LSH' is not the question being tested. What is being tested is whether a consumer who correctly reaches for the card then carries its fixture numbers onto a corpus four orders of magnitude larger. A strong answer selects the LSH shape, quantifies cost for its own N, and treats C3 as the only figure that transfers without qualification -- it is exact arithmetic over the divisors of num_perm, with no corpus involved. Note the asymmetry the consumer should catch: at this N, quoting the fixture's reduction factor understates the benefit, while quoting the fixture's recall overstates the quality. Errors in opposite directions from the same habit.",
+      "observed_history": [
+        {
+          "result": "pass",
+          "notes": "Identified the problem from recognition signals; quantified naive cost from wall_clock; caught all three seeded defects BY ID; chose Shape A while explicitly flagging Shape C as an unanswered prerequisite (correct -- the selection rule checks C first); applied C3 to recommend num_perm=144; built monitoring from A5. Its confidence section separated [executed] anchors from [reasoned] heuristics from its own extrapolations, and marked each.",
+          "weakness_surfaced": "Correctly declined to fully trust the 0.7 -> 144 recommendation because C3 published a measured error only for the 0.6 pairings. Fixed: all three pairings now carry measured errors, pinned by test_all_suggested_pairings_have_measured_error.",
+          "conditions": {
+            "model_class": "sonnet-class",
+            "input_scope": "card.json only -- no CARD.md, no impl/, no tests/, no repo access",
+            "harness": "manual, run by the card's reviewer, not by run_scenarios.py",
+            "card_state_at_run": {
+              "tests_count": 32,
+              "c3_measured_pairings": [
+                "0.6"
+              ],
+              "notes": "PREDATES the C3 all-pairings fix, the twin-drift fix, and the existence of this file. A re-run today is against a materially different card.",
+              "card_json_sha256": null,
+              "staleness": "PERMANENTLY_UNVERIFIABLE",
+              "unverifiable_reason": "PERMANENTLY UNVERIFIABLE, not merely unrecorded. The card.json bytes for this run no longer exist -- the file was overwritten in place before hashing was introduced, and git history for this repo begins after that point. No future session can fill this in, so it must not be left looking like a pending TODO."
+            },
+            "consumer_prior_exposure": "none -- fresh agent, no prior exposure to the card, its authoring, or its review"
+          },
+          "reproducibility": "NOT reproducible as recorded. The weakness this run surfaced (C3 publishing a measured error only for the 0.6 pairings) was fixed in response to it, so a consumer today cannot rediscover it. The run's VALUE is unchanged -- it is evidence the format let a consumer find a real gap -- but it is a historical record, not a baseline to diff against."
+        },
+        {
+          "result": "pass",
+          "notes": "Rubric 9 of 9 plus 3 of 4 hard credit. Identified from recognition signals (clean SHA-256 yet duplicates persist means near not exact); quantified naive cost at 319,999,600,000 pairs and 3.7 days\nsingle-threaded; flagged A1 A3 plus A4 A5; hit edge 2 to 1 by treating scoring without blocking as the naive algorithm and capping at top-k neighbours; selected Shape A MinHash plus LSH; flagged Shape C\ndeterministic blocking key as an unanswered prerequisite with do not skip to embeddings before answering this; used C3 content; built A5 monitoring as cluster count, size distribution, max size, max intra-cluster\ndistance, rolling precision, merges reversed; separated evidence classes in a borrowed-numbers section. HC2 exact: num_perm 180 bands 15 rows 12 gives knee 0.798 for a 0.8 target and 128 leaves 0.078 avoidable\nerror, both verified correct. HC3 refused C1 fixture recall explicitly and cited the cards own record of that over-generalisation. HC4 both halves. HC1 PARTIAL: declined to carry C2 32.6x but did not compute its\nown reduction for N=800k nor note the factor grows with N. BEYOND CARD AND VERIFIED: Erdos-Renyi giant-component threshold at roughly N/2 = 400,000 edges, which is 0.000125 percent of all pairs, quantifying when\nsingle-linkage chaining becomes catastrophic. The card has A1 qualitatively with no threshold, so this is a card ENHANCEMENT opportunity not a defect. Also correct: 800k by 768 fp32 is 2.5 GB, 50k slice is 1.25e9\npairs for brute-force ground truth.",
+          "conditions": {
+            "model_class": "opus-class",
+            "input_scope": "card.json only -- no CARD.md, no impl/, no tests/, no repo",
+            "consumer_prior_exposure": "none -- separate session unaware of the authoring conversation",
+            "harness": "run_scenarios.py --prepare/--record (hash captured at prepare)",
+            "card_state_at_run": {
+              "card_json_sha256": "763e01b55e8a",
+              "prepared_at": "2026-09-09T19:49:30+00:00"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "SC-02-refusal-1800-contracts",
+      "kind": "refusal",
+      "prompt": "We need to deduplicate 1,800 legal contracts. Every pairwise duplicate decision must be auditable and explainable to a regulator. Should we use LSH?",
+      "seeded_traps": [
+        {
+          "trap": "the card's own pattern is the wrong answer",
+          "detected_via": "do_not_use_when: per-pair auditability"
+        },
+        {
+          "trap": "N is below the pattern's own breakpoint",
+          "detected_via": "cost_model.breakpoints below=5000"
+        }
+      ],
+      "rubric": {
+        "must_answer_no_first": true,
+        "must_cite_do_not_use_when": [
+          "auditability",
+          "N below 5000"
+        ],
+        "must_take_escalation_exit": "recall must be provable not probabilistic",
+        "must_not_select_shape": "A"
+      },
+      "observed_history": [
+        {
+          "result": "pass",
+          "notes": "Answered 'No' first, cited BOTH independent blockers, took the escalation exit.",
+          "strongest_moment": "Repurposed the edge annotation 'scoring without blocking IS the naive algorithm' to justify running stage 2 exhaustively at small N while keeping the A1/A3/A5 fixes. That is reasoning over graph structure, not prose recall -- the edge's `why` field was written to explain an ordering constraint and the consumer used it to derive a valid alternative configuration.",
+          "conditions": {
+            "model_class": "sonnet-class",
+            "input_scope": "card.json only -- no CARD.md, no impl/, no tests/, no repo access",
+            "harness": "manual, run by the card's reviewer, not by run_scenarios.py",
+            "card_state_at_run": {
+              "tests_count": 32,
+              "c3_measured_pairings": [
+                "0.6"
+              ],
+              "notes": "PREDATES the C3 all-pairings fix, the twin-drift fix, and the existence of this file. A re-run today is against a materially different card.",
+              "card_json_sha256": null,
+              "staleness": "PERMANENTLY_UNVERIFIABLE",
+              "unverifiable_reason": "PERMANENTLY UNVERIFIABLE, not merely unrecorded. The card.json bytes for this run no longer exist -- the file was overwritten in place before hashing was introduced, and git history for this repo begins after that point. No future session can fill this in, so it must not be left looking like a pending TODO."
+            },
+            "consumer_prior_exposure": "none -- fresh agent, no prior exposure to the card, its authoring, or its review"
+          },
+          "reproducibility": "Likely reproducible. Nothing in do_not_use_when, the 5000 breakpoint, or the escalation table changed after this run."
+        },
+        {
+          "result": "pass -- the reproducibility prediction held",
+          "notes": "Answered 'No' decisively, cited BOTH independent blockers (do_not_use_when auditability entry, and the below-5000 breakpoint), and took the escalation exit verbatim. Confirms the `reproducibility: likely reproducible` verdict, which until now was a [reasoned] claim in the card's own taxonomy.",
+          "route_differed_from_run_1": "Run 1 repurposed the decomposition edge annotation to justify exhaustive stage-2 at small N. Run 2 never touched the edges; it cited C1 (measured recall 0.6133), C3's quantisation error, A2, and Shape C instead. Same verdict by a different path -- weak evidence that the card affords more than one valid route to the correct refusal.",
+          "defects_it_surfaced": [
+            "cost_model.breakpoints stated `{\"below\": 5000}` with NO UNIT. The consumer compared 1,619,100 COMPARISONS against a 5,000-ITEM threshold and reached the right answer only by luck of magnitude. FIXED: both breakpoints carry `unit`, and the gate now errors on a bare breakpoint number. Note CARD.md said 'below N~5,000' and was never ambiguous -- the defect existed ONLY in the record this consumer was restricted to.",
+            "C1 published `measured: 0.6133` with its parameters but not its CORPUS, so the consumer quoted 'recall is only ~61%' onto 1,800 legal contracts as a property of the algorithm. FIXED: C1 gains `measured_on` (80-doc synthetic fixture) and an explicit `generalizes: NO`; the gate now warns on any measured value lacking a corpus."
+          ],
+          "conditions": {
+            "model_class": "sonnet-class",
+            "input_scope": "card.json only -- instructed not to read CARD.md, impl/, tests/, or scenarios.json; compliance not independently verified",
+            "harness": "manual delegation by the card author",
+            "consumer_prior_exposure": "UNVERIFIED -- the agent self-reported 'none' and its stated reasoning route differs from run 1's, which is weak corroboration. But it was spawned by the card's author inside the authoring conversation, which contains the expected answer. The author cannot verify the self-report, so this is NOT a naive baseline.",
+            "card_state_at_run": {
+              "card_json_sha256": null,
+              "notes": "NOT CAPTURED. The run happened before the two defects it surfaced were fixed, and card.json was overwritten in place, so the hash of the bytes this consumer actually read is unrecoverable. A hash must be captured AT RUN TIME by a harness, not reconstructed afterwards.",
+              "staleness": "PERMANENTLY_UNVERIFIABLE",
+              "unverifiable_reason": "PERMANENTLY UNVERIFIABLE, not merely unrecorded. The card.json bytes for this run no longer exist -- the file was overwritten in place before hashing was introduced, and git history for this repo begins after that point. No future session can fill this in, so it must not be left looking like a pending TODO."
+            }
+          },
+          "reproducibility": "This record cannot serve as a baseline for two independent reasons: unverifiable consumer independence, and an uncaptured input hash. Its value is the two defects it found."
+        },
+        {
+          "result": "pass",
+          "notes": "Rubric 4 of 4. Answered No first; cited both do_not_use_when blockers (auditability, and N below 5000); took the escalation exit verbatim; refused Shape A. Beyond rubric: discarded only the blocking\nstage while keeping stages 2-4, flagging A1 chaining, A3 keep-first nondeterminism and A5 bare-count reporting as worse under audit. Correctly struck the 0.6133 figure as fixture-specific. Vocabulary audit found\nno thread-only terms and two terms absent from the card (counterparty, jurisdiction) indicating independent reasoning. DEFECT FOUND: quoted C2 reduction_factor 32.6 as 32x onto 1800 contracts, the same\nover-generalisation class it had just refused, because C2 carries no generalizes field where C1 does.",
+          "conditions": {
+            "model_class": "opus-class",
+            "input_scope": "card.json only -- no CARD.md, no impl/, no tests/, no repo",
+            "consumer_prior_exposure": "none -- fresh session, first message, no access to the authoring conversation",
+            "harness": "run_scenarios.py --prepare/--record (hash captured at prepare)",
+            "card_state_at_run": {
+              "card_json_sha256": "3e77c63c17d2",
+              "prepared_at": "2026-09-06T11:37:59+00:00"
+            }
+          }
+        },
+        {
+          "result": "pass",
+          "notes": "Rubric 4 of 4. AFTER arm of the C2-generalizes experiment; wrapper byte-identical to run 3. All asserted numbers verified against impl: knees at 128 perm exact, no knee between 0.420 and 0.707,\nknee_error(0.60)=0.1071 vs stated 0.107, pairwise count and timing arithmetic correct. EXPERIMENT INCONCLUSIVE AS PRE-REGISTERED: my cell (c) conflated mentioning 32.6x with misapplying it, and this run names the\nfigure while explicitly declining to transfer it. Observable: the run-3 defect did NOT recur, the new generalizes text was quoted near-verbatim so the field was demonstrably read, but only half-obeyed -- it\nhonoured the prohibition and skipped the instruction to compute P(candidate) for its own N. n=1 per arm, cannot separate the card edit from within-model variance. Minor: built the expressibility argument on a\nhypothetical 0.60 threshold (error 0.107) where the cards own example 0.70 gives 0.0071, since 0.707 is itself a knee; framed conditionally so not false, but favourable-case selection. Separately, my own\nverification one-liner produced a false negative on the knee-gap claim via hardcoded rounded bounds -- instrument bug 7.",
+          "conditions": {
+            "model_class": "opus-class",
+            "input_scope": "card.json only -- no CARD.md, no impl/, no tests/, no repo",
+            "consumer_prior_exposure": "none -- fresh session, first message, no access to the authoring conversation",
+            "harness": "run_scenarios.py --prepare/--record (hash captured at prepare)",
+            "card_state_at_run": {
+              "card_json_sha256": "ac310933de86",
+              "prepared_at": "2026-09-09T06:56:51+00:00"
+            }
+          }
+        },
+        {
+          "result": "pass",
+          "notes": "FIRST CROSS-ARM DATA EVER ON PC-0001, and it FILLS THE DOCUMENTED x REFUSAL CELL. Pre-registered at eb6d6a8e23b9 before either arm ran; card-arm score sealed to runs/SEALED-PC0001-SC02-card-arm-score.json before the control existed. PURPOSE: PC-0005 SC-02 produced +2.0, the largest gap measured, and it was CONFOUNDED between the refusal KIND and the obscure DOMAIN. This run separates them. I predicted gap <= +0.5 (H_domain_obscurity). OBSERVED +0.5 on all six items, and +0.0 -- EXACTLY ZERO -- on the five excluding the item I had pre-registered as card-favouring. PREDICTION HELD, and H_refusal_kind is KILLED: refusal on a documented card adds nothing, so the +2.0 was NOT a property of the task kind. CARD 5.0/6, CONTROL 4.5/6. THE GRID IS NOW COHERENT WITH ONE VARIABLE: obscure x planning +1.0 and +1.0, obscure x refusal +2.0, documented x planning +0.0 and +0.0, documented x refusal +0.0. DOMAIN is the variable; KIND is not. Refusal AMPLIFIES the effect where the domain is already outside the prior (+2.0 vs +1.0) and adds exactly nothing where it is not. That is a more precise statement of the selection rule than anything the project has had: build a card only when the domain sits outside the consumer prior, and if it does, the refusal scenarios are where it pays most. FIFTH TIME A CONTROL HAS BEATEN THE CARD ARM ON AN ITEM, and it was on the cards own anti-pattern: J4, A2, band-collision-is-not-a-duplicate. The control said \"not a bucket-collision proxy\" and \"the hash signatures collided in >=k of n bands ... isnt a substantive, auditable rationale tied to contract content\", tied explicitly to the audit requirement. The CARD arm never stated it, covering only the false-negative side. The card contains A2 and the card arm did not transmit it while a card-free arm derived it. THE ONLY ITEM THE CARD WON OUTRIGHT was J5, transitive chaining: union-find over similar pairs merges documents that are not similar to each other, so a cluster can hold a pair nobody judged. The control stayed ENTIRELY PAIRWISE and never reached cluster formation at all -- 0.0. So on a textbook domain the single thing the card adds is the CLUSTER-FORMATION hazard, which is invisible if you reason pair by pair. That is a narrow, real, and honestly bounded contribution. MY CARD-FAVOURING FLAG WAS CORRECT THIS TIME: J3 needed C1s magnitude claim (recall AT the threshold is well below 1.0, not merely fuzzy) and the control reached only \"fuzzy at the boundary\". On PC-0005 SC-02 the equivalent flag was WRONG -- the control got H1 unaided. So the flag is worth keeping and is not automatically true. CONTROL ENRICHMENT, and the card genuinely lacks it: LSH uses random permutations/hyperplanes, so run-to-run variance itself undermines auditability unless the seed is fixed and documented. Verified by grep -- card.json contains ZERO occurrences of seed, random, reproducib or hyperplane, and its four determinis* hits are about blocking keys, not about LSH being nondeterministic across runs. Seventh consumer-sourced enrichment, and the first on PC-0001. Also notable: the control computed ~1.62M pairs, marginally MORE precise than the card arms ~1.6M. EXISTING 4-ITEM RUBRIC: card 4/4. It is four items of pure refusal compliance (answer no first, cite two do_not_use_when entries, take the exit, do not select Shape A) and will saturate like every other rubric in the portfolio; not quoted as card value.",
+          "conditions": {
+            "model_class": "sonnet 5",
+            "input_scope": "CARD arm: card.json @eb6d6a8e23b9 (17,301 char artifact) + prompt. CONTROL arm: prompt only (311 chars), 0 card element IDs; request text byte-identical across arms (sha256 f7a68c53b63ece41, 148 chars). NOTE: this prompt makes no reference to a card or supplied numbers, so unlike PC-0005 SC-02 there was no source-unavailability dodge available to the control -- a fairer test of the same cell.",
+            "consumer_prior_exposure": "none -- two separate fresh sonnet 5 sessions, card arm first, operator labelled each file explicitly. Probe check consistent: 0.6133 / 5000 / union-find / representative_link / do_not_use_when all present in card.json and the card arm, all ZERO in the control artifact.",
+            "harness": "run_scenarios.py --prepare/--record (hash captured at prepare)",
+            "card_state_at_run": {
+              "card_json_sha256": "eb6d6a8e23b9",
+              "prepared_at": "2026-09-13T09:18:59+00:00"
+            }
+          }
+        }
+      ],
+      "_documented_refusal_experiment_preregistration": {
+        "hypothesis_under_test": "PC-0005 SC-02 (refusal, OBSCURE card) produced +2.0, the largest gap the project has measured. That is CONFOUNDED between two explanations: (a) the refusal KIND is where cards pay, because do_not_use_when content has no counterpart in a model's prior; (b) the obscure DOMAIN is where cards pay, and refusal is incidental. The grid shows why it cannot be resolved from existing data: obscure x refusal is filled, documented x refusal is EMPTY. Same confound structure as the scenario-construction one caught earlier today.",
+        "the_grid": {
+          "obscure_planning": "PC-0005 SC-04 +1.0, SC-01 +1.0",
+          "obscure_refusal": "PC-0005 SC-02 +2.0",
+          "obscure_diagnosis": "EMPTY (W3)",
+          "documented_planning": "PC-0003 SC-01 +0.0, PC-0004 SC-01 +0.0",
+          "documented_refusal": "THIS RUN",
+          "documented_diagnosis": "EMPTY, no such scenario exists"
+        },
+        "why_this_scenario": "PC-0001 is near-duplicate detection at scale -- MinHash, LSH banding, Jaccard, union-find. About as heavily documented as applied CS gets, so it is the clean 'documented' arm. SC-02 is a refusal, matching the kind of the +2.0. And PC-0001 is one of only TWO cards in the portfolio with ZERO cross-arm data, so this run also gives it its first evidence of whether it adds anything at all.",
+        "competing_predictions_are_OPPOSITE": {
+          "H_domain_obscurity": "gap <= +0.5. Card value tracks how much of the domain sits outside the prior, so a documented card adds ~nothing even on a refusal.",
+          "H_refusal_kind": "gap >= +1.5. The +2.0 was about the TASK KIND, not the domain -- cards pay on refusals regardless of how well documented the domain is."
+        },
+        "my_committed_prediction": "gap <= +0.5 (H_domain_obscurity). LSH is textbook material: a card-free sonnet should reach both '1,800 is small enough to compare exhaustively' and 'probabilistic recall cannot be certified to a regulator' unaided. Both documented cards gave exactly +0.0 on planning, and I expect that to hold on refusal.",
+        "falsifier_i_commit_to_accepting": "gap >= +1.5 means the REFUSAL KIND, not domain obscurity, drives card value. That would overturn the selection rule I have been building toward all session and replace it with 'build cards for refusals, regardless of domain' -- a completely different and much cheaper recommendation. I commit to reporting that rather than defending domain-prior, which I have already retracted once today.",
+        "DEAD_ZONE": "gap == +1.0 fires NO branch -- report INDETERMINATE BY DESIGN. Branch thresholds are two scoring steps apart, the fix validated on PC-0005 SC-02 where it took four judgment calls to reverse the verdict instead of one.",
+        "uninformative_condition": "If BOTH arms score <= 1.0 of 6, report 'instrument blind', bank for neither side.",
+        "no_source_asymmetry_here": "Unlike PC-0005 SC-02, this prompt makes NO reference to a card or to supplied numbers, so the control cannot dodge via 'I cannot verify your source'. This is a fairer test of the same cell.",
+        "scoring_rule": "Score the EXISTING 4-item rubric for continuity with runs 1-4 (all card-only, all stale). Score these six discriminators SEPARATELY as the PRIMARY metric. J3 is card-favouring by construction, so report the gap over all 6 AND over the 5 excluding J3, and treat the 5-item figure as the honest one.",
+        "discriminators": {
+          "J1_N_IS_BELOW_THE_THRESHOLD_AND_THE_NAIVE_COST_IS_COMPUTABLE": "Says naive all-pairs is the right answer at this N and backs it with the arithmetic -- 1800*1799/2 = ~1.62M comparisons, i.e. seconds to minutes -- so LSH's candidate reduction buys nothing that matters here. Card: do_not_use_when[0] 'N < ~5000 (naive is simpler)', cost_model.wall_clock. FREE-ANSWER GUARD: '1,800 is small' alone scores 0; 'LSH is overkill' alone scores 0. Credit requires the naive cost being COMPUTED or explicitly bounded, because that is WHY the reduction is worthless.",
+          "J2_PROBABILISTIC_RECALL_CANNOT_BE_MADE_AUDITABLE_so_LEAVE_the_technique": "Identifies that LSH misses are probabilistic PER PAIR, so no per-pair guarantee can be given to a regulator, AND takes the exit -- exact blocking plus full within-block comparison -- rather than patching LSH with more bands, more permutations or a verification pass. Card: do_not_use_when[4], escalation row 'recall must be provable not probabilistic -> leave this card'. FREE-ANSWER GUARD: 'LSH can miss duplicates' scores 0; 'add a verification pass to LSH' scores 0, because patching keeps the probabilistic core.",
+          "J3_RECALL_AT_THE_THRESHOLD_IS_WELL_BELOW_1_and_the_SHAPE_transfers_not_the_VALUE": "States that recall AT the similarity threshold is substantially below 1.0 rather than near-perfect -- the counter-intuitive part -- while NOT quoting the fixture's 0.61 as this corpus's expected recall. Card: C1 and its generalizes, which literally records 'a consumer quoted 61% onto 1,800 legal contracts' as the misuse this field exists to prevent. FREE-ANSWER GUARD: quoting 61% as the answer for these 1,800 contracts scores 0 -- that is the recorded misuse, not the finding. CARD-FAVOURING BY CONSTRUCTION, excluded from the honest 5-item gap.",
+          "J4_A_BAND_COLLISION_IS_NOT_A_DUPLICATE_so_it_is_not_an_EXPLANATION": "Separates candidate generation from the duplicate decision: a band collision is a hint requiring an exact comparison, and 'these two documents hashed into the same band' is not a reason that can be given to a regulator. Card: A2. FREE-ANSWER GUARD: 'LSH is a black box' scores 0; 'you should verify candidates' scores 0 unless tied to the auditability requirement.",
+          "J5_TRANSITIVE_CHAINING_CREATES_MERGES_NOBODY_CAN_DEFEND": "Notes that union-find / transitive closure over similar pairs merges documents that are NOT similar to each other, so a cluster can contain a pair no human ever judged -- fatal when every pairwise decision must be explainable. Card: A1, plus the 'one giant cluster -> switch to representative_link' escalation. FREE-ANSWER GUARD: 'clustering can produce errors' scores 0. Credit requires the TRANSITIVITY mechanism and that it yields un-auditable pairwise decisions.",
+          "J6_ANTI_CREDIT_does_not_quote_a_fixture_REDUCTION_FACTOR_as_a_benefit": "ANTI-CREDIT. Quoting a candidate-reduction multiple ('~30x fewer comparisons') as a reason to use LSH here scores 0. Card: C2's generalizes states that the DIRECTION of the error matters -- at small N quoting it OVERSTATES the benefit, and a reduction on a corpus small enough to scan exhaustively is not a benefit at all. Credit for either never invoking a reduction factor, or invoking one and immediately gating it on corpus size."
+        },
+        "registered_at_card_hash": "eb6d6a8e23b9",
+        "arms": {
+          "card": "sonnet 5",
+          "control": "sonnet 5"
+        },
+        "registered_before_either_arm_ran": true
+      }
+    }
+  ],
+  "known_limits_of_this_fixture": [
+    "2 scenarios only",
+    "authored with knowledge of the card -- an independent author would be harsher",
+    "one model class tested (sonnet-class); no cross-class comparison exists",
+    "both recorded runs predate the current card (tests_count 32 vs 34); SC-01 is explicitly not reproducible, so the fixture currently has ZERO runs against the card as it stands",
+    "the static gate proves the card CONTAINS the basis for each expected decision; it cannot prove a consumer will find it"
+  ],
+  "scoring_conventions": {
+    "must_cite_constraints_and_must_flag_anti_patterns": "These list elements the answer must ENGAGE WITH. Naming the identifier is NOT required and must NOT be required. Credit an answer that uses a constraint's content correctly even if it never writes the ID, and do not credit an answer that names an ID without using it. Recorded after three consecutive runs hit content without the label: PC-0004 SC-01 run 1 and PC-0003 SC-01 run 1 both used C2's mirror argument unnamed, and PC-0005 SC-03 run 1 used C3 and A3 unnamed while naming six other IDs. Scored literally, the rubric was marking down correct reasoning for failing to recite a label.",
+    "figures_in_rubric_text": "Where a rubric quotes a measured figure, it is there to identify WHICH finding is meant, never to require the consumer to reproduce the number. If the element's `generalizes` says the figure does not transfer, an answer giving the mechanism without the number is fully correct and an answer quoting the number as its own expected value is WRONG."
+  }
+}

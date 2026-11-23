@@ -1,0 +1,530 @@
+{
+ "id": "PC-0002",
+ "title": "Embedding generation for a corpus",
+ "one_line": "Turn a document corpus into vectors that are correct and affordable. The failures are silent, cheap to prevent, and mostly not where people look.",
+ "status": "written",
+ "authored": "2026-09",
+ "domains": [
+  "ai-ml-engineering",
+  "software-engineering"
+ ],
+ "card": {
+  "scope": "The PLUMBING of embedding generation: units, pooling, batching, identity, metric pairing.",
+  "explicitly_out_of_scope": "Which embedding model is best. This card contains no model-quality measurement and cannot rank models; see do_not_use_when.",
+  "why_stdlib_only": "numpy, torch and transformers were all importable in the environment this card was written in, and are deliberately unused. If `[executed]` depended on a model download it would mean 'this ran once on the author's machine' rather than 'this runs wherever the gate runs'. The cost of that choice is that no claim here is about embedding quality -- which is stated rather than blurred."
+ },
+ "recognition_signals": [
+  "retrieval works on short documents and is poor on long ones -- the length distribution is being silently truncated",
+  "similarity scores are all high and compressed into a narrow band, with rankings that feel arbitrary",
+  "embedding spend is far above what your token count implies, with no obvious hot spot",
+  "the cache hit rate is near 100% after a model upgrade, which is impossible if the vectors changed",
+  "short documents cluster together regardless of topic",
+  "re-embedding the same corpus twice produces different vectors"
+ ],
+ "selection_rule": {
+  "text": "Check Shape B first: if the corpus p99 token length fits the model window, one vector per document is correct and everything below is unnecessary complexity. Only when p99 exceeds the window does chunking (Shape A) become mandatory, and then the metric and identity decisions come with it.",
+  "evidence": "reasoned",
+  "grounding": "analytic"
+ },
+ "solution_shapes": [
+  {
+   "id": "A",
+   "name": "Chunk, bucket, masked-pool, normalise, cache by full identity",
+   "implemented": true,
+   "when": "corpus p99 length exceeds the model window",
+   "cost": "1 forward pass per chunk. chunks/doc is a CURVE in the window, not a constant.",
+   "metric_semantics": "cosine on unit vectors; document vector is the normalised sum of its normalised chunk vectors",
+   "evidence": "executed",
+   "measured": {
+    "chunks_per_doc_by_window": {
+     "256": 1.6485,
+     "512": 1.184,
+     "1024": 1.029
+    }
+   },
+   "measured_on": {
+    "what": "the full 2000-document corpus, overlap=32",
+    "population": "pc0002-fixture-corpus",
+    "n": 2000
+   },
+   "correction": "Previously published as 1.07 from a 30-document fixture. A consumer planning a 4M-document job REFUSED to size capacity on it, because every other number in this card comes from the 2000-document corpus. It was right: the 30-doc sample understates forward passes by 11%, and it is the low outlier of a converging series (1.067 / 1.120 / 1.196 / 1.184 at n=30/100/500/2000). That means a smoke-test sample understates cost and converges from below, so never size capacity from the smallest fixture in a series.",
+   "smoke_test_only": "The 30-document pipeline figures -- 32 chunks, 10592 paid slots, 35.21% waste at batch 16 -- are an end-to-end smoke test of the composed pipeline, NOT a capacity estimate. Use the curve above for planning. That means these figures license a pass/fail on wiring and nothing about capacity, so do not put them in a sizing document.",
+   "grounding": "synthetic-fixture"
+  },
+  {
+   "id": "B",
+   "name": "Truncate to the window, one vector per document",
+   "implemented": false,
+   "when": "p99 length < window. Simpler, and NOT worse -- there is nothing to chunk",
+   "cost": "1 forward pass per document",
+   "known_loss": "at window=512 on the fixture corpus this would discard 16.34% of all tokens, so it is only correct when the distribution actually fits",
+   "evidence": "executed",
+   "grounding": "synthetic-fixture"
+  },
+  {
+   "id": "C",
+   "name": "Multi-vector / late interaction (keep chunk vectors, never aggregate)",
+   "implemented": false,
+   "when": "you need to know WHICH passage matched, or aggregation is destroying long documents",
+   "cost": "storage and query cost multiply by chunks/doc",
+   "metric_semantics": "changes retrieval semantics: max-over-chunks, not one score per document",
+   "evidence": "reasoned",
+   "grounding": "analytic"
+  },
+  {
+   "id": "D",
+   "name": "Hierarchical summarise-then-embed",
+   "implemented": false,
+   "when": "documents are far longer than the window and a lossy single vector is genuinely wanted",
+   "cost": "adds an LLM call per document plus its own failure modes",
+   "evidence": "reasoned",
+   "grounding": "analytic"
+  }
+ ],
+ "rejected": [
+  {
+   "option": "Train or fine-tune a bespoke embedding model",
+   "why": "Nothing in the failure list above is a model-quality problem. Every defect this card measures is plumbing, and a better model fixes none of them -- it inherits all five.",
+   "evidence": "reasoned",
+   "grounding": "analytic"
+  },
+  {
+   "option": "Mean-pool the whole document, ignoring the window",
+   "why": "Not an option, a bug: tokens past the window were never encoded, so they contribute nothing. The result looks like a document vector and represents a prefix.",
+   "evidence": "executed",
+   "grounding": "synthetic-fixture"
+  },
+  {
+   "option": "Store raw vectors, normalise at query time",
+   "why": "Pays the normalisation on every query instead of once per write, and leaves a window in which any consumer using dot product gets norm-biased ranking. Measured: 69.5% of queries return a different top-1 result.",
+   "evidence": "executed",
+   "grounding": "synthetic-fixture"
+  }
+ ],
+ "decomposition": {
+  "nodes": [
+   {
+    "n": 1,
+    "name": "Units -- what do you actually embed?",
+    "module": "impl/chunking.py"
+   },
+   {
+    "n": 2,
+    "name": "Pooling -- many token vectors to one",
+    "module": "impl/pooling.py"
+   },
+   {
+    "n": 3,
+    "name": "Throughput -- what does a batch cost?",
+    "module": "impl/throughput.py"
+   },
+   {
+    "n": 4,
+    "name": "Identity -- what IS an embedding, for cache purposes?",
+    "module": "impl/identity.py"
+   },
+   {
+    "n": 5,
+    "name": "Metric pairing -- which similarity, on which vectors?",
+    "module": "impl/metric.py"
+   }
+  ],
+  "edges": [
+   {
+    "from": 3,
+    "type": "requires",
+    "to": 1,
+    "why": "You cannot pad until you know the units. Batching a corpus of documents and batching a corpus of chunks are different length distributions with different waste."
+   },
+   {
+    "from": 2,
+    "type": "requires",
+    "to": 3,
+    "why": "Padding is what creates the need for a mask. Pooling is only ambiguous because batching introduced positions that are not data."
+   },
+   {
+    "from": 4,
+    "type": "requires",
+    "to": 1,
+    "why": "The cache key must include window and overlap, or a chunking change silently serves vectors built from different text spans. Measured: omitting either field gives a 100% stale-serve rate."
+   },
+   {
+    "from": 4,
+    "type": "requires",
+    "to": 2,
+    "why": "Pooling is part of the vector's identity. Switching masked-mean to CLS produces different vectors for identical text; a key that omits pooling cannot tell."
+   },
+   {
+    "from": 5,
+    "type": "requires",
+    "to": 2,
+    "why": "Pooling determines norm behaviour, and norm behaviour is exactly what decides whether dot and cosine agree. This is a PROBLEM dependency; the import direction is the reverse, which is a distinction worth keeping."
+   },
+   {
+    "from": 2,
+    "type": "conflicts-with",
+    "to": 5,
+    "why": "The sharpest interaction in this card. Unmasked pooling over zero padding rescales the vector by exactly the fill ratio and leaves direction untouched -- harmless under cosine, catastrophic under unnormalised dot, where a 1/16-full row is down-weighted 16x. Neither node is wrong alone; the pair is."
+   }
+  ]
+ },
+ "cost_model": {
+  "measured_on": "impl/corpus.py synthetic_corpus(2000, seed=20260906): 2000 documents, 551,579 whitespace tokens, p50=182 p90=616 p99=1390 max=3291. Right-skewed, which is the property every result below depends on. NOT real text -- see generalisation notes per constraint.",
+  "naive_cost": {
+   "description": "Default pipeline: no chunking, arrival-order batching at 32, unmasked mean pooling, unnormalised vectors, cache keyed on text.",
+   "tokens_discarded_at_window_512": 0.1634,
+   "padded_slots_wasted_at_batch_32": 0.7696,
+   "top1_disagreement_from_unnormalised_dot": 0.695,
+   "stale_serve_rate_after_a_model_upgrade": 1.0,
+   "evidence": "executed",
+   "grounding": "synthetic-fixture"
+  },
+  "constraints": [
+   {
+    "id": "C1",
+    "claim": "Truncation loss is larger in tokens than in documents, at every window.",
+    "measured": {
+     "256": {
+      "docs_over": 0.3485,
+      "tokens_lost": 0.3728
+     },
+     "512": {
+      "docs_over": 0.1405,
+      "tokens_lost": 0.1634
+     },
+     "1024": {
+      "docs_over": 0.027,
+      "tokens_lost": 0.0368
+     },
+     "2048": {
+      "docs_over": 0.0015,
+      "tokens_lost": 0.0036
+     }
+    },
+    "measured_on": {
+     "what": "the 2000-document fixture corpus",
+     "population": "pc0002-fixture-corpus",
+     "n": 2000
+    },
+    "generalizes": "SHAPE yes, VALUES no -- and the SHAPE holds only when the window sits ABOVE the bulk of the length distribution, so that the few overflowing documents carry a disproportionate share of token mass. It does NOT follow from right-skew alone.",
+    "read_this_way": "`docs_over` is the smaller number at every window, so it is the flattering one to quote.",
+    "evidence": "executed",
+    "grounding": "synthetic-fixture",
+    "CORRECTION": {
+     "previous_generalizes": "ANY right-skewed corpus has tokens_lost > docs_over",
+     "status": "FALSIFIED by execution",
+     "counter_example": "90 docs of 600 tokens + 10 of 10,000 (right-skewed, 10x tail): docs_over=1.0 vs tokens_lost=0.6675 at window 512, and the inequality fails at 599, 256 and 128 too",
+     "why": "truncation always KEEPS W tokens of every document, so once the window falls below the bulk, docs_over saturates at 1.0 while tokens_lost cannot reach it",
+     "evidence_file": "grounding/AUDIT-PC0002-RESULT.json"
+    },
+    "UNITS_CORRECTION": {
+     "what_the_figures_actually_measure": "WORD counts against a 512-WORD window, not tokenizer tokens against a 512-token window",
+     "why_it_matters": "the window is a fixed model constant and does not rescale with the subword factor, so a word-space measurement at 512 is taken at the wrong operating point",
+     "the_512_token_equivalent_on_this_fixture": {
+      "window_in_words_at_k_1.35": 379,
+      "docs_over": 0.222,
+      "tokens_lost": 0.2477,
+      "vs_published_at_512_words": {
+       "docs_over": 0.1405,
+       "tokens_lost": 0.1634
+      },
+      "understatement": "about +58% and +52%"
+     },
+     "status": "SCOPED -- treat the published percentages as a LOWER BOUND on real truncation loss",
+     "fixture_limitation": "the fixture's real-tokenizer k is 5.64 (synthetic text), so it cannot demonstrate token-level behaviour at all; real prose is nearer 1.3",
+     "evidence_file": "grounding/AUDIT-PC0002-impl-closed-loop.json"
+    }
+   },
+   {
+    "id": "C2",
+    "claim": "Overlap >= k-1 preserves every k-token span exactly; more overlap buys nothing and costs tokens.",
+    "measured": {
+     "k8_recall_by_overlap": {
+      "0": 0.996384,
+      "4": 0.99845,
+      "7": 1.0,
+      "8": 1.0,
+      "16": 1.0,
+      "32": 1.0
+     },
+     "token_overhead_by_overlap": {
+      "0": 0.0,
+      "8": 0.0051,
+      "32": 0.0213,
+      "64": 0.0439,
+      "128": 0.0949
+     }
+    },
+    "measured_on": {
+     "what": "k-gram recall on a 200-document slice; token overhead on all 2000. n records the SMALLER sample, because that is the one backing the recall claim.",
+     "population": "pc0002-fixture-corpus",
+     "n": 200
+    },
+    "generalizes": "THRESHOLD yes -- overlap >= k-1 is exact index arithmetic, not a property of this corpus. Overhead percentages are corpus-specific.",
+    "read_this_way": "The common 'overlap 10-20% of the window' rule means 51-102 tokens here, costing 4.4-9.5% extra tokens for ZERO additional 8-gram preservation over overlap=7 at 0.51%. That means the extra overlap buys paid tokens and no additional n-gram coverage, so prefer the smaller overlap unless you can show a retrieval gain.",
+    "evidence": "executed",
+    "grounding": "synthetic-fixture"
+   },
+   {
+    "id": "C3",
+    "claim": "Length-bucketed batching cuts padding waste, and the gain PEAKS at batch size 128 -- it is not monotonic.",
+    "measured": {
+     "8": {
+      "arrival_waste": 0.6359,
+      "bucketed_waste": 0.0278,
+      "slot_reduction": 2.6704
+     },
+     "32": {
+      "arrival_waste": 0.7696,
+      "bucketed_waste": 0.0784,
+      "slot_reduction": 4.0009
+     },
+     "128": {
+      "arrival_waste": 0.8411,
+      "bucketed_waste": 0.2914,
+      "slot_reduction": 4.4595
+     },
+     "512": {
+      "arrival_waste": 0.8909,
+      "bucketed_waste": 0.7037,
+      "slot_reduction": 2.7172
+     }
+    },
+    "measured_on": {
+     "what": "the 2000-document fixture corpus; unit is token slots (max_len x rows), NOT seconds",
+     "population": "pc0002-fixture-corpus",
+     "n": 2000
+    },
+    "generalizes": "DIRECTION yes, PEAK LOCATION no. The peak exists because a bucketed batch eventually spans a wide length range again; where it falls depends on the distribution.",
+    "read_this_way": "Measuring one batch size would have produced 'bucketing gives 4x, so batch as large as possible'. That is confidently wrong: at 512 the gain falls below the value at 32.",
+    "falsified_a_planned_claim": true,
+    "evidence": "executed",
+    "grounding": "synthetic-fixture",
+    "scope_note": "the PEAK LOCATION is a property of this corpus, not a universal batch size. On a bimodal short+long corpus the reduction is monotonic and peaks at 512. Verified by execution; see grounding/AUDIT-PC0002-RESULT.json."
+   },
+   {
+    "id": "C4",
+    "claim": "Unmasked mean pooling is direction-preserving over ZERO padding and corrupting over non-zero padding. The anti-pattern is conditional.",
+    "measured": {
+     "zero_pad": {
+      "cosine_vs_correct": 1.0,
+      "norm_ratio": "equals the fill ratio exactly",
+      "nearest_neighbour_changed": 0.0
+     },
+     "pad_value_0.35": {
+      "fill_0.500": 0.99627,
+      "fill_0.250": 0.980156,
+      "fill_0.125": 0.952602,
+      "fill_0.062": 0.916795,
+      "nearest_neighbour_changed": 0.9167
+     }
+    },
+    "measured_on": {
+     "what": "synthetic token vectors, dim=64, centroid 0.35, padded_len 512; ranking over 48 documents",
+     "population": "synthetic-token-vectors",
+     "n": 48
+    },
+    "generalizes": "The zero-pad ALGEBRA is exact and general: summing k real vectors and dividing by n>k is a scalar multiple, so cosine cannot change. The non-zero magnitudes depend on the angle between the pad vector and the data. REACHABILITY, added after a consumer run: the zero-pad row is an algebraic reference point, not a setting. Real encoder outputs at pad positions are non-zero, so the naive idiom lands in the pad_value>0 regime every time. See anti_patterns A2 conditionality_caveat, which is reasoned rather than measured.",
+    "read_this_way": "The widely repeated claim 'unmasked pooling corrupts your embeddings' is FALSE for zero padding under cosine, and true under unnormalised dot or with a non-zero pad vector. Check which case you are in before believing either version.",
+    "falsified_a_planned_claim": true,
+    "evidence": "executed",
+    "grounding": "synthetic-fixture"
+   },
+   {
+    "id": "C5",
+    "claim": "L2-normalise once at write time and dot becomes cosine; skip it and 69.5% of top-1 results change. That means normalisation is a correctness decision rather than a tuning knob, so do not defer it to query time.",
+    "measured": {
+     "max_abs_cosine_minus_dot_after_normalising": 1.1102230246251565e-16,
+     "top1_flip_rate_unnormalised": 0.695,
+     "norm_spread_ratio": 29.448,
+     "top1_flip_rate_after_normalising": 0.0
+    },
+    "measured_on": {
+     "what": "60 synthetic document vectors, dim=16, norms scaled across a 29.4x range; 200 queries",
+     "population": "synthetic-document-vectors",
+     "n": 60
+    },
+    "generalizes": "The identity is exact for any unit vectors. The flip RATE is a function of norm spread -- with equal norms it is 0 by construction, which is why the spread is published beside it.",
+    "corroborated_by": "A real internal pipeline states the same invariant in a comment: 'L2-normalise once so that dot = cosine'.",
+    "evidence": "executed",
+    "grounding": "synthetic-fixture",
+    "unverified": "the 69.5% top-1 flip rate and 29.4x norm spread are corpus-and-model specific and were NOT re-derived in the execution audit. The cosine-equals-dot-after-normalising half was confirmed at 1.388e-16. That means the identity half is safe to rely on and the rate half is not, so quote the mechanism and recompute the rate on your own corpus."
+   },
+   {
+    "id": "C6",
+    "claim": "An embedding's identity is (text, model, revision, pooling, window, overlap, normalize, dim). Omitting ANY field that later changes gives a 100% stale-serve rate. That means each omitted identity field is a silent cache-poisoning path, so the key must not be a subset of the inputs that change the vector.",
+    "measured": {
+     "text_only_key_stale_serve_rate": 1.0,
+     "full_identity_key_stale_serve_rate": 0.0,
+     "stale_rate_when_each_field_is_omitted": {
+      "model": 1.0,
+      "revision": 1.0,
+      "pooling": 1.0,
+      "window": 1.0,
+      "overlap": 1.0,
+      "normalize": 1.0,
+      "dim": 1.0
+     }
+    },
+    "measured_on": {
+     "what": "a 500-document slice of the fixture corpus, one field varied at a time",
+     "population": "pc0002-fixture-corpus",
+     "n": 500
+    },
+    "generalizes": "YES. This is a property of hashing, not of the corpus.",
+    "read_this_way": "A stale HIT is the dangerous outcome; a MISS only costs money. The fields that look safe to omit are exactly the ones you have not changed yet.",
+    "evidence": "executed",
+    "grounding": "synthetic-fixture",
+    "assumption": "the 100% stale-serve figure assumes every text is re-requested after the configuration change; the mechanism holds regardless, the constant does not. That means you may rely on the direction and never on the magnitude, so treat the constant as an upper bound rather than a forecast."
+   }
+  ],
+  "breakpoints": [
+   {
+    "below": 512,
+    "unit": "tokens (corpus p99 document length), compared against the model window",
+    "action": "use Shape B -- truncate, one vector per document. There is nothing to chunk, so chunking adds cost and no recall.",
+    "evidence": "reasoned",
+    "grounding": "analytic"
+   },
+   {
+    "above": 10000000,
+    "unit": "chunks to embed",
+    "action": "the cache and the length-bucketing queue stop fitting in one process; shard by chunk-key hash so each shard keeps a coherent cache",
+    "evidence": "reasoned",
+    "grounding": "analytic"
+   }
+  ]
+ },
+ "anti_patterns": [
+  {
+   "id": "A1",
+   "name": "Truncate and forget",
+   "why": "Passing max_length=512, truncation=True and never measuring what left. Nothing errors; long documents are silently represented by their prefix.",
+   "diagnostic": "chunking.truncation_loss(corpus, window) -- report tokens_lost, not docs_over",
+   "measured": "16.34% of tokens at window=512 on the fixture corpus -- that means tokens past the window are dropped with no error, so the loss cannot be detected from logs alone.",
+   "evidence": "executed",
+   "grounding": "synthetic-fixture",
+   "generalizes": "NO as a value. The loss rate is entirely a function of your document-length distribution against your window, and 16.34% is this fixture's. The SHAPE transfers: any corpus whose upper-tail length exceeds the window loses tokens silently, with no error and no warning. Compute your own rate from your token-length histogram -- that is what Phase 0 of Shape A is for, and it costs no GPU. That means your own token-length histogram, not this figure, is what licenses a window choice."
+  },
+  {
+   "id": "A2",
+   "name": "Mean-pooling across the padded axis",
+   "why": "CONDITIONAL, and this card was going to state it unconditionally. Over zero padding it only rescales -- cosine is untouched. It becomes a real defect under an unnormalised dot product, or when the pad positions are non-zero, where 91.7% of nearest neighbours change. That means the defect is conditional on pooling and pad value, so do not treat masking as unconditionally required.",
+   "diagnostic": "pooling.pad_contamination(true_len, padded_len, pad_value=...) at several fill ratios, then contamination_changes_ranking",
+   "measured": "cosine 1.000000 at every fill ratio with zero pad; 0.916795 at 1/16 occupancy with pad_value 0.35 -- that means zero padding is harmless under cosine while a non-zero pad value is not, which is why the pad constant matters more than the mask.",
+   "evidence": "executed",
+   "grounding": "synthetic-fixture",
+   "conditionality_caveat": {
+    "claim": "The benign branch is essentially UNREACHABLE through the idiom this anti-pattern warns about, so 'it is conditional' must not be read as 'I am probably fine'.",
+    "why": "`outputs.last_hidden_state.mean(dim=1)` pools HIDDEN STATES, and a real encoder emits NON-ZERO vectors at pad positions. An additive attention mask masks KEYS, so pad QUERY positions still attend to the real tokens and settle near a shared centroid. Padding input_ids with zeros does NOT make the hidden states at those positions zero, and conflating the two is precisely what lets a reader place themselves in the safe case. Read the zero-pad row as an algebraic reference point, not as a configuration you can select: it is what isolates the rescaling effect from the rotation effect. If you have zeroed the pad rows yourself you have already done the hard half of masking, and dividing by the mask sum instead of the padded length is the remaining line.",
+    "so_the_practical_verdict": "With unmasked pooling over real encoder outputs you are in the corrupting regime, where 91.7% of nearest neighbours change at 1/16 occupancy. Fix the pooling; do not rely on the metric to save you.",
+    "evidence": "reasoned",
+    "grounding": "analytic",
+    "honest_limit": "NOT measured by this card. impl/ is stdlib-only and runs no transformer, so it cannot demonstrate that pad-position hidden states are non-zero -- it takes pad_value as a parameter and measures both regimes. The claim is about how transformer inference works, and a reader who doubts it should print last_hidden_state at a pad position.",
+    "provenance": "Raised by a naive consumer run (SC-01, opus-class, exposure=none) which corrected the card unprompted. impl/pooling.py already carried this in a comment; card.json did not. The knowledge was lost in transcription from implementation to the artifact a consumer is permitted to read."
+   },
+   "generalizes": "SPLIT. The zero-pad result is exact ALGEBRA and fully general: summing k real vectors and dividing by n>k is a scalar multiple, so cosine cannot change. The 0.916795 is NOT a transferable rate -- it is a function of the fill ratio and of the angle between the pad vector and your data. Read the reachability note in conditionality_caveat before placing yourself in the zero-pad row: real encoder outputs at pad positions are never zero."
+  },
+  {
+   "id": "A3",
+   "name": "Caching embeddings by text",
+   "why": "The cache returns a vector built by a configuration you no longer run, with a high hit rate and no error. A suspiciously good hit rate straight after a model upgrade is this bug, not luck.",
+   "diagnostic": "identity.stale_serve_rate(corpus, cfg_old, cfg_new, text_only_key)",
+   "measured": "1.0 -- every document served stale -- that means the failure is total rather than partial, so even a small sampled check cannot miss it.",
+   "evidence": "executed",
+   "grounding": "synthetic-fixture"
+  },
+  {
+   "id": "A4",
+   "name": "Dot product on unnormalised vectors",
+   "why": "Dot is norm-biased, so it systematically prefers whichever documents happen to have large norms -- often just the long ones. 'Cosine and dot are basically the same' holds only for unit vectors.",
+   "diagnostic": "metric.ranking_flip_rate(corpus_vectors, queries) alongside metric.norm_spread",
+   "measured": "69.5% of queries change top-1 at a 29.4x norm spread; 0% after normalising -- that means normalising eliminates the effect rather than reducing it, so the fix is complete and needs no tuning.",
+   "evidence": "executed",
+   "grounding": "synthetic-fixture",
+   "generalizes": "SPLIT, and the useful half is exact. The 0%-after-normalising figure is an identity, not a measurement: unit vectors make dot and cosine the same ranking, always. The 69.5% is a monotone function of norm SPREAD -- at equal norms it is 0 by construction, so quoting it without the 29.4x spread beside it is meaningless. Measure your own norm spread; the action (normalise once at write time) does not depend on the number."
+  },
+  {
+   "id": "A5",
+   "name": "Batching in arrival order, or bucketing and losing the permutation",
+   "why": "Two failures with one cause. Arrival-order batching pays for padding; length-bucketing fixes it and reorders the corpus, so a caller that zips results against the original list attaches every vector to the wrong document, silently.",
+   "diagnostic": "throughput.bucketing_gain(lengths, bs) for cost; assert restore(order) round-trips for correctness",
+   "measured": "76.96% of slots wasted at batch 32 in arrival order, 7.84% bucketed -- that means arrival ordering dominates padding waste here rather than batch size, so bucket before you tune the batch.",
+   "evidence": "executed",
+   "grounding": "synthetic-fixture",
+   "generalizes": "DIRECTION only, and beware non-monotonicity. Padded-slot waste is a function of the length distribution WITHIN a batch and of the batch size, and the bucketing gain is NOT monotone in batch size -- see C3, where the benefit peaks near 128 and falls badly by 512. Do not quote 76.96% or 7.84%; recompute both on your own histogram at the batch size you actually intend to deploy, and check more than one."
+  }
+ ],
+ "do_not_use_when": [
+  "you need to CHOOSE an embedding model -- this card measures plumbing and contains no model-quality evidence of any kind",
+  "your corpus p99 token length already fits the model window -- take Shape B and skip all of this",
+  "you need to explain an individual similarity score to an auditor -- see PC-0001's escalation on provable vs probabilistic",
+  "the question is multilingual or domain-shift coverage, which is a model-selection question wearing a pipeline costume"
+ ],
+ "escalation": [
+  {
+   "symptom": "retrieval quality is poor and truncation loss is already ~0",
+   "action": "leave this card; the problem is model choice or the task, neither of which is measured here"
+  },
+  {
+   "symptom": "you need to know which passage matched",
+   "action": "Shape C -- keep chunk vectors, accept the storage multiple"
+  },
+  {
+   "symptom": "aggregation is washing out long documents",
+   "action": "Shape C, or Shape D if a single lossy vector is genuinely required"
+  },
+  {
+   "symptom": "cache hit rate is near 100% right after a config change",
+   "action": "A3 -- your key is incomplete; expect to re-embed"
+  },
+  {
+   "symptom": "similarity scores are compressed and rankings feel arbitrary",
+   "action": "check normalisation before anything else (C5); it is one line and it changes 69.5% of top-1 results"
+  }
+ ],
+ "cited_evidence": [
+  {
+   "path": "private:production-embedding-dedup-utility.py (source not shippable; paraphrased in the card)",
+   "lines": "49, 74",
+   "supports": "C5",
+   "note": "A real internal pipeline normalising once with the comment 'L2-normalise once so that dot = cosine' -- independent corroboration of the C5 invariant, from code written without reference to this card.",
+   "honest_limit": "The same file batches in fixed arrival-order batches of 64 (A5), but it embeds IMAGES through a fixed-size preprocess, so every row is the same length and there is no padding waste to recover. A5 does not apply there, and citing it as a violation would be wrong.",
+   "evidence": "cited",
+   "grounding": "production-data",
+   "corroborates": "practice",
+   "corroborates_why": "Confirms the recommended PRACTICE exists in production -- normalising once at write time so that dot equals cosine -- in code written without reference to this card. The identity itself is analytic, so the citation corroborates that people actually do it, not that the 69.5% flip rate transfers."
+  },
+  {
+   "path": "problem-cards/grounding/PC0002-A4-PINNED-CORPUS-RESULT.json (self; grounding layer not shipped in this edition)",
+   "lines": "sampled_sites_all_twelve",
+   "supports": "A4",
+   "note": "First L2 unit run against the pinned corpus denominator. 105 similarity sites enumerated across 57 repos at pinned HEAD SHAs; 12 sampled by a pre-registered deterministic rule and read producer-to-dot-product. 12 of 12 DECIDED, 0 unnormalised. The exemplar is message_queue_agents/orchestrator/state.py::_cosine_similarity, which is literally 'return float(np.dot(a, b))' and is safe only because the sole producer in the same file calls encode(..., normalize_embeddings=True) -- the fact a result-capped remote search cannot see.",
+   "honest_limit": "The corpus was curated for AI/ML work by an explicit rubric and is therefore biased toward safe code; a zero here is 'not found in this biased corpus', never 'does not occur'. 12 of 105 is 11.4% coverage, so one unnormalised site outside the sample would move 0/12 to 1/13 without contradicting anything reported. The enumeration also under-covers '@'/matmul spellings by declared choice, and that under-coverage was CONFIRMED to bite: AWSComplianceAgentProcessor has test_unit_normalized_inputs_equal_dot_product but its production helper never appears in the enumeration, so 105 is a lower bound.",
+   "evidence": "cited",
+   "grounding": "production-data",
+   "corroborates": "practice",
+   "corroborates_why": "Corroborates that the recommended PRACTICE is already the local convention -- inline self-normalising cosine at 11 of 12 sampled sites -- which is a usefulness finding against A4, not a confirmation of it. It does NOT corroborate the 69.5% magnitude, which remains fixture-only, and it publishes no prevalence figure.",
+   "unshipped": true
+  }
+ ],
+ "related_cards": [
+  {
+   "id": "PC-0001",
+   "relation": "composes_with",
+   "topic": "near-duplicate detection at scale",
+   "status": "written",
+   "why": "PC-0001 Shape B (ANN index over embeddings) consumes what this card produces. The seam is a metric-semantics change that neither card owns alone: PC-0001's measured recall 0.6133 is MinHash/Jaccard on shingles, and substituting cosine over embeddings changes what 'similar' means -- the threshold does not carry across. Both cards say so at the seam."
+  }
+ ],
+ "tests": {
+  "count": 46
+ },
+ "known_limitations": [
+  "No claim about embedding quality, model choice, or multilingual coverage. Not a gap to be filled later -- it is outside the card's scope by construction, because it cannot be measured without a real model.",
+  "The tokenizer is whitespace, not subword. Ratios are invariant to uniform rescaling; absolute token counts are illustrative.",
+  "Cost is measured in padded token slots, not wall-clock. Slots are a good proxy for attention-dominated work and a poor one for small-shape kernel overheads.",
+  "The corpus is synthetic. Every constraint states separately whether its SHAPE or its VALUES generalise.",
+  "Run history deliberately does NOT live in this file. It lives in scenarios.json, because a claim in card.json about card.json having been tested makes the card's own bytes a function of its own testing -- and staleness is keyed on those bytes, so recording a run would invalidate the run that was just recorded. Ask scenarios.json how many consumers have planned over this card."
+ ]
+}

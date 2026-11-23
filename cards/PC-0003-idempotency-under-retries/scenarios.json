@@ -1,0 +1,165 @@
+{
+  "card": "PC-0003",
+  "note": "Scenarios are the only test of the card's PURPOSE rather than its shape: can a consumer that reads ONLY card.json reach the right decision? The gate can check statically that every expected decision resolves to a real element of the card; whether a model actually reaches it has to be run, recorded, and compared against the card bytes it read.",
+  "scenarios": [
+    {
+      "id": "SC-01-planning-payment-capture-retries",
+      "kind": "planning",
+      "prompt": "We run a payment capture service. The client SDK retries on timeout with 3 retries at roughly 20 seconds apart. Capture adds an amount to a merchant's daily settlement total. An engineer has proposed: dedupe on a SHA-256 of the request body; write the dedupe key first and then apply the capture, so we never double-charge; set the dedupe key TTL to 30 seconds to match the retry interval; and return 409 Conflict on a duplicate. Produce a plan.",
+      "traps": [
+        "the effect is an INCREMENT, so natural idempotency (Shape A) is unavailable and forcing it is A5",
+        "the dedupe key is derived from the request body -- two legitimate identical captures merge (A2)",
+        "key-first without a committed flag loses the effect on a crash (A1), which the proposal frames as the safe direction",
+        "TTL 30s against a 3 x 20s retry window is undersized (A4); the proposal's reasoning sounds right and is wrong",
+        "409 with no body means a retry cannot obtain its receipt (A3)",
+        "the client CAN supply a token here, so Shape B is available and is the answer",
+        "an SDK that retries is enough to create duplicates -- no queue or infrastructure claim is needed"
+      ],
+      "rubric": {
+        "must_select_shape": "B",
+        "must_not_select_shape": "A",
+        "must_flag_anti_patterns": [
+          "A1",
+          "A2",
+          "A3",
+          "A4"
+        ],
+        "must_cite_constraints": [
+          "C2",
+          "C3",
+          "C4"
+        ],
+        "must_quantify_naive_cost_from": "cost_model.constraints",
+        "must_flag_naive_scan_via_edge": {
+          "from": 1,
+          "to": 3
+        },
+        "must_build_monitoring_from": "A3",
+        "must_take_escalation_exit": "duplicates appear only under load",
+        "hard_credit": [
+          "notices that the proposal's TTL reasoning is about the retry INTERVAL and the requirement is the total retry WINDOW",
+          "states that key-first is not merely 'the safe direction' but LOSES work, while effect-first duplicates it, and that the row damage is identical either way -- credit the SYMMETRY and the conclusion that no single-step order is correct. Do NOT require the 573-of-4000 count: A1's generalizes says that figure scales with the crash-injection rate and transfers nothing, so an answer that gives the mechanism without the number is fully correct and an answer that quotes the number as if it were the consumer's expected loss is worse.",
+          "asks whether two identical captures are legitimate before accepting a content hash",
+          "prefers a resumable reservation over demanding a distributed transaction"
+        ]
+      },
+      "observed_history": [
+        {
+          "result": "pass",
+          "notes": "FIRST consumption of PC-0003. Rubric 7 of 8 clean plus 4 of 4 hard credit, the best score of the session. Selected B and rejected A; flagged A1 A2 A3 A4 plus A5; cited C3 C4 C6 C7 R3 by ID but C2 by\ncontent only (the effect algebra decides) without naming it; quantified naive cost from constraints via the 0.1668 duplicate-delivery ratio; made edge 1 to 3 its Question 0 and used it constructively; built four\nmonitors from A3 including reservations stuck in RESERVED; took the duplicates-only-under-load escalation and applied its exact max_attempts minus 1 times interval action. All four hard credit including the\nhardest, that byte-identical legitimate captures are ordinary in payments via partial captures against one authorization and same merchant same amount same day. NO CARD DEFECT FOUND: I nearly reported a gap\naround re-expressing the effect grain, but Shape A already says expressible as an assignment and the selection rule repeats it, so the consumer was applying the card not exceeding it. CONDITIONING HONOURED ON SIX\nFIGURES on a third card whose generalizes fields were written the previous turn and never consumed: 2.66x quote the sign not the multiplier, 0.7545 to 0.0003 direction only, 667 of 667 is 1.0 by construction, C7\nn equals 2 do not quote a frequency, 61 ticks means nothing outside its clock, 0.1668 follows from chosen parameters. No before-arm on this card so no causal claim, but consistent with the two-card result.\nSharpest independent move: row-scoping is useless here because the target row merchant plus settlement date is exactly where repeat identical amounts concentrate. WEAK RIDER RESOLVED POSITIVE but uninterpretable\nas pre-registered, across-card not within-card. DEFECT I INTRODUCED: hard credit item 2 rewards quoting 573 of 4000 while A1 generalizes now says those counts transfer nothing; the consumer stated the mechanism\nwithout the number, which is correct under the new conditioning and under-credited by the literal rubric wording. Will reword to reward the mechanism.",
+          "conditions": {
+            "model_class": "opus-class",
+            "input_scope": "card.json only -- no CARD.md, no impl/, no tests/, no repo",
+            "consumer_prior_exposure": "none -- fresh session, first message, no access to the authoring conversation",
+            "harness": "run_scenarios.py --prepare/--record (hash captured at prepare)",
+            "card_state_at_run": {
+              "card_json_sha256": "46b8abe98178",
+              "prepared_at": "2026-09-09T12:02:41+00:00"
+            }
+          }
+        },
+        {
+          "result": "pass",
+          "notes": "DOMAIN-PRIOR TEST: PRE-REGISTERED PREDICTION HELD. Sealed at 9b6a00ceae20 before either arm ran; card-arm score sealed to runs/SEALED-PC0003-SC01-card-arm-score.json BEFORE the control reply was seen. Predicted gap <= +0.5; OBSERVED GAP +0.0 on the primary metric (pre-registered discriminators: CARD 2.5/3, CONTROL 2.5/3). F1 1.0/1.0 -- BOTH named interval-vs-window as the category error; the control was arguably sharper (\"Match the retry interval is backwards ... must exceed the entire retry span, not equal the gap between individual attempts\") and enumerated t=0,20,40,60. F3 1.0/1.0 -- BOTH identified that a body hash merges legitimate distinct captures (same merchant, same amount) and BOTH reached a client-supplied token. F2 0.5/0.5 -- NEITHER arm produced the pre-registered symmetry (that key-first LOSES while effect-first DUPLICATES and no single-step order is correct); both got the key-first loss half only, and the card arm framed key-first as \"right instinct, incomplete\", the direction the guard was written against. F2 is now a CARD-CONTENT/TRANSMISSION gap on the mirrored-failure claim, not a consumer miss. UNINFORMATIVE CLAUSE DID NOT FIRE: both arms scored 2.5/3, far above the 0.5/3 blind floor, so the scenario discriminates and the null is a real null. DOMAIN PRIOR IS THEREFORE CONFIRMED, n=3: PC-0005 (obscure, organizational) +1.0; PC-0004 (protobuf/varint, documented) +0.0; PC-0003 (idempotency keys/retries/exactly-once, heavily documented) +0.0. HONEST LIMIT THAT BOUNDS THE WHOLE FINDING: the POSITIVE side of the correlation is n=1. Two documented cards show +0.0 and exactly ONE obscure card shows advantage, so \"build cards only for obscure domains\" rests on a single card and needs a second obscure card to be more than a two-point line. THE 8-ITEM RUBRIC DISAGREES AND I AM NOT HIDING IT: card 5.0/8 vs control 4.0/8 = +1.0. The entire gap sits in items that reward engaging the cards own framework -- C2 effect algebra and decomposition edge 1->3, which the control never touches at all -- i.e. it is recitation-weighted, which is exactly the artifact the discriminators were pre-registered to bypass. Primary metric stands at +0.0. THE ONE GENUINE CARD-CORRECTED ACTION, worth recording precisely because it is small: C3 says atomicity is SUFFICIENT BUT NOT NECESSARY. The CONTROL demanded atomicity and put the idempotency record \"in the same DB as the settlement ledger\"; the CARD arm flagged that a 30s-TTL dedupe store is almost certainly a different system from the settlement total and preferred a resumable reservation. Correct, differentiating, card-attributable -- and worth only part of one hard_credit item, moving the primary metric zero. CROWD-OUT, THIRD OBSERVATION, still flagged not claimed: the control produced FOUR substantive items absent from both the card and the card arm -- (1) the claim step must be an atomic insert, not check-then-write, or a UI double-click racing an SDK retry passes the check twice; (2) a background sweep for stale IN_PROGRESS records so a crash never permanently blocks a key; (3) a unique constraint on the ledger table itself, so money movement does not depend on one cache; (4) retries arriving from OUTSIDE the SDK backoff (proxy retries, manual customer retry), which means the exposure window is not bounded by retry_gap x max_attempts at all -- a real extension of C4, whose arithmetic assumes your own policy is the whole window. Verified by grep: the card has 0 occurrences of race/simultaneous/check-then/atomic insert/unique constraint/proxy/out-of-band/sweep; its single \"concurrency\" mention routes AWAY from idempotency. FIFTH consumer-sourced enrichment queue, and the first on PC-0003. CARD-ATTRIBUTABLE CONTENT CHECK (pre-registered, not scored): 4 of 5 markers present in the card arm and absent from the control -- effect-algebra/increment-so-Shape-A-unavailable (opening sentence; the control never discusses the algebra), (max_attempts - 1) x interval verbatim, resumable reservation with committed flag, atomicity-sufficient-not-necessary. The card IS transmitting. The single absent marker is the mirrored symmetry, i.e. the same content F2 measures. COMPARABILITY DEFECT IN MY OWN PREREG: it said score the 8-item rubric \"for comparability with run #1\", but run #1 is opus-class and both arms here are sonnet 5, so 5.0/8 vs run #1 7/8 is CROSS-TIER and must not be read as card degradation.",
+          "conditions": {
+            "model_class": "sonnet 5",
+            "input_scope": "CARD arm: card.json @9b6a00ceae20 (34,861 char artifact) + prompt. CONTROL arm: prompt only (608 chars), verified 0 card element IDs and 0 card vocabulary; request text byte-identical across arms (sha256 6d1e424059cb78c2, 445 chars)",
+            "consumer_prior_exposure": "none -- two separate fresh sonnet 5 sessions, control run first, neither saw the other. CAVEAT: the control session emitted an unrelated security-tooling finding about a different repository (a conftest.py in another project), so it carried SOME prior tooling context. Zero relation to idempotency or to any card element, so the arm stands, but the session was not pristine.",
+            "harness": "run_scenarios.py --prepare/--record (hash captured at prepare)",
+            "card_state_at_run": {
+              "card_json_sha256": "9b6a00ceae20",
+              "prepared_at": "2026-09-11T14:52:13+00:00"
+            }
+          }
+        },
+        {
+          "result": "pass",
+          "notes": "DOMAIN-PRIOR EXPERIMENT RESOLVED. Sealed prereg registered at this exact hash before either arm ran. Both arms sonnet-5. Primary metric was three discriminators: CONTROL 2.0/3, CARD 3.0/3, GAP +1.0. The sealed falsifier says gap at or above +1.0 KILLS the domain-prior hypothesis and must be reported as a fifth dead theory rather than rescued. IT IS DEAD. The hypothesis predicted that PC-0003's heavily documented content -- idempotency keys, retry semantics, dedupe TTLs, commit flags -- would leave the card nothing to add, exactly as PC-0004 showed +0.0. The card added +1.0 anyway, the same advantage the hypothesis credited to PC-0005's obscure organizational content, so prior strength has no explanatory work left. The uninformative clause did NOT fire: both arms scored far above the 0.5 floor, so this is a real kill and not a broken fixture. THE WHOLE VERDICT RESTS ON ONE ITEM: F2's control score. Zero gives +1.0 and kills; half gives +0.5 and confirms. Two of three readings would have CONFIRMED my own prediction and I chose the one that kills it, because the sealed free-answer guard says credit REQUIRES the mirrored symmetry and that wrap it in a transaction alone scores zero -- and the control's remedy is that exact phrase. Generosity to the control would have vindicated me, so I applied the guard literally instead. Fragility was flagged in a pre-run note BEFORE the replies were seen, not discovered afterwards. STRENGTH OF EVIDENCE IS WEAK IN ABSOLUTE TERMS: one run, one item, and W3 just measured a 43% gap swing on byte-identical inputs with twice as many items. Dead by the sealed rule, weakly evidenced in fact, and both halves stated. F1 was matched by the control WITHOUT the card even though F1 is the one discriminator whose vocabulary sits in the card. Card-attributable content check, declared unscored: mirrored symmetry and the max_attempts minus 1 formula appear in the card arm ONLY, so the card IS transmitting. Control was strong at 2.0/3 and caught an eviction-under-memory-pressure defect neither the card arm nor the rubric raised. Full scoring in grounding/PC0003-SC01-DOMAIN-PRIOR-RESULT.json.",
+          "conditions": {
+            "model_class": "sonnet-5",
+            "input_scope": "consumer_view of card.json; rubric, hard_credit and prereg withheld; request byte-identical to control at 6d1e424059cb78c2",
+            "consumer_prior_exposure": "none -- fresh session, artifact pasted verbatim",
+            "harness": "run_scenarios.py --prepare/--record (hash captured at prepare)",
+            "card_state_at_run": {
+              "card_json_sha256": "9b6a00ceae20",
+              "prepared_at": "2026-09-14T10:33:24+00:00"
+            }
+          }
+        }
+      ],
+      "_domain_prior_experiment_preregistration": {
+        "hypothesis_under_test": "DOMAIN PRIOR STRENGTH, not inference-pairing, governs card-vs-control advantage. Card value is a function of how much of the card's content already sits in the consumer's prior. Evidence so far, n=2 cards: PC-0005 (suppression arithmetic / what deserves a page -- idiosyncratic, organizational, weak prior) showed +1.0. PC-0004 (protobuf tag-keying, varint, positional CSV -- heavily documented public knowledge, strong prior) showed +0.0.",
+        "why_this_card": "PC-0003's content -- idempotency keys, retry semantics, exactly-once delivery, dedupe TTLs, two-phase commit-flag patterns -- is among the most heavily documented material in distributed systems. The domain-prior hypothesis therefore predicts PC-0003 behaves like PC-0004, NOT like PC-0005. This is the discriminating case.",
+        "prediction": "GAP (card minus control) <= +0.5, i.e. PC-0003 behaves like PC-0004 (+0.0), not PC-0005 (+1.0).",
+        "falsifier": "GAP >= +1.0 KILLS the domain-prior hypothesis. A well-documented domain would then be showing the same card advantage as an obscure one, leaving prior strength with no explanatory work to do. I commit to reporting that as a fifth dead theory rather than rescuing it.",
+        "uninformative_condition": "If BOTH arms score <= 0.5 of 3, the scenario is non-discriminating and the run is UNINFORMATIVE about domain prior -- I must report 'instrument blind', NOT 'null confirms the hypothesis'. This clause exists because a null prediction is otherwise satisfied by any broken fixture, which would let me confirm myself for free.",
+        "scoring_rule": "Score the EXISTING 8-item rubric + 4 hard_credit unchanged, for comparability with run #1. Score these three discriminators SEPARATELY as the experiment's primary metric.",
+        "discriminators": {
+          "F1_TTL_requirement_is_the_WINDOW_not_the_INTERVAL": "Rejects 'TTL 30s to match the retry interval' by naming the ERROR OF KIND: the requirement is the total retry WINDOW (3 retries x ~20s = 60s+, plus clock skew and queue delay), not the gap between attempts, so the last retry can land after expiry and double-apply. Card elements: A4, escalation exit's (max_attempts - 1) x interval. FREE-ANSWER GUARD: '30s seems short, use a longer TTL' scores 0. Credit requires naming interval-vs-window as the category error.",
+          "F2_key_first_and_effect_first_are_MIRRORED_failures": "States that key-first LOSES the effect on a crash while effect-first DUPLICATES it, that NEITHER single-step order is correct, and that a committed/status flag is therefore structurally required. Card element: A1 (and its generalizes, which says the measured 573-of-4000 count transfers nothing -- an answer giving the mechanism WITHOUT the number is fully correct). FREE-ANSWER GUARD: accepting the proposal's 'key first so we never double-charge' scores 0; 'wrap it in a transaction' alone scores 0. Credit requires the SYMMETRY -- both orders wrong, in mirrored directions.",
+          "F3_a_content_hash_MERGES_LEGITIMATE_duplicates": "Identifies that SHA-256 of the request body makes two genuinely distinct but identical captures indistinguishable -- same merchant, same amount, same day is ORDINARY in payments (partial captures against one authorization) -- so the key must be a CLIENT-SUPPLIED token, which this scenario explicitly permits. Card elements: A2, C2, Shape B. FREE-ANSWER GUARD: 'hash collisions are a risk' scores 0; 'add a timestamp to the hash' scores 0 unless it reaches a client-supplied token."
+        },
+        "card_attributable_content_check": "Separately, and NOT scored: record which distinctive card content appears in the card arm but NOT the control -- the mirrored-failure symmetry, the window-vs-interval framing, the (max_attempts - 1) x interval action, the effect-algebra rule that an INCREMENT cannot be made naturally idempotent so Shape A is unavailable. If the card arm produces NONE of these, the card is not transmitting at all and that is the finding, independent of scores.",
+        "registered_at_card_hash": "9b6a00ceae20",
+        "arms": {
+          "card": "sonnet 5",
+          "control": "sonnet 5"
+        },
+        "registered_before_either_arm_ran": true
+      }
+    },
+    {
+      "id": "SC-02-refusal-add-dedupe-to-an-assignment-workload",
+      "kind": "refusal",
+      "prompt": "Our service writes a customer's shipping address. The handler does address_table.put(customer_id, address) -- a full overwrite, no merge. We see about 15% duplicate deliveries from our at-least-once queue. Leadership wants an idempotency-key table with a 7-day TTL added before the next peak. Design it.",
+      "expected": "refuse",
+      "traps": [
+        "the effect is already an ASSIGNMENT, so duplicates are harmless: measured 667 duplicate applications and 0 of 1334 rows wrong",
+        "the 15% duplicate rate is real and is not evidence of a problem -- the card's C2 exists to break exactly this inference",
+        "the 7-day TTL is borrowed from real code cited in the card, which makes the wrong plan look well-sourced",
+        "the correct output adds nothing: 4000 durable writes and 4000 extra rows buy zero correctness here (A6)",
+        "a consumer that pattern-matches 'at-least-once queue' to 'needs idempotency keys' fails this scenario"
+      ],
+      "rubric": {
+        "must_not_select_shape": "B",
+        "must_flag_anti_patterns": [
+          "A6"
+        ],
+        "must_cite_constraints": [
+          "C2",
+          "C6"
+        ],
+        "must_cite_do_not_use_when": [
+          "the operation is already an assignment so 0 of 1334 rows are wrong with no dedupe store"
+        ],
+        "must_take_escalation_exit": "nobody can say whether the effect is an assignment",
+        "hard_credit": [
+          "declines to build the table and says what to build instead: nothing",
+          "separates duplicate-delivery RATE from duplicate-application HARM rather than treating the 15% as the finding",
+          "notes that the 7-day TTL in the cited code is not transferable and is a function of the caller's retry policy",
+          "warns that adding the table is not merely wasteful but creates a new correctness surface (TTL, ordering, response storage) for zero benefit"
+        ]
+      },
+      "observed_history": [
+        {
+          "result": "pass",
+          "notes": "Rubric 5 of 5 plus 4 of 4 hard credit. Refused the idempotency key for the address write because put is an assignment and applying it twice leaves the row identical, calling it arithmetic not a\nmeasurement; cited A6 and C6 by ID; used C2 effect-algebra-decides content without naming it; cited the do_not_use_when; took the escalation exit that if nobody can say whether the effect is an assignment then\nstop. HC1 declines and says build nothing, conditional on measurement. HC2 perfect: separated duplicate receives via ApproximateReceiveCount from duplicate shipments as two different numbers and refused to treat\nthe 15 percent as the finding. HC3 exceeded: noted the 7-day TTL comes from one internal DAO config and is not inheritable. HC4 named TTL, ordering and response storage as a new correctness surface for zero\nbenefit. CONDITIONING HONOURED: numbers come from a seeded simulator at n=4000, structures transfer and rates do not; C7 read as reachable and silent not as a rate; A3 stated as 100 percent of replays by\nconstruction. POSSIBLE DEFECT IN CITED EVIDENCE: it argues 7 days may be UNDERSIZED because the SQS ceiling is message retention up to 14 days plus DLQ dwell before redrive, so a routine 9-day redrive finds\nexpired reservations and re-executes silently during incident recovery. The card cites the 7-day production TTL as a precedent without that bound. Worth checking against the cited source.",
+          "conditions": {
+            "model_class": "opus-class",
+            "input_scope": "card.json only -- no CARD.md, no impl/, no tests/, no repo",
+            "consumer_prior_exposure": "none -- separate session unaware of the authoring conversation",
+            "harness": "run_scenarios.py --prepare/--record (hash captured at prepare)",
+            "card_state_at_run": {
+              "card_json_sha256": "564e8d9e396a",
+              "prepared_at": "2026-09-09T19:49:30+00:00"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "scoring_conventions": {
+    "must_cite_constraints_and_must_flag_anti_patterns": "These list elements the answer must ENGAGE WITH. Naming the identifier is NOT required and must NOT be required. Credit an answer that uses a constraint's content correctly even if it never writes the ID, and do not credit an answer that names an ID without using it. Recorded after three consecutive runs hit content without the label: PC-0004 SC-01 run 1 and PC-0003 SC-01 run 1 both used C2's mirror argument unnamed, and PC-0005 SC-03 run 1 used C3 and A3 unnamed while naming six other IDs. Scored literally, the rubric was marking down correct reasoning for failing to recite a label.",
+    "figures_in_rubric_text": "Where a rubric quotes a measured figure, it is there to identify WHICH finding is meant, never to require the consumer to reproduce the number. If the element's `generalizes` says the figure does not transfer, an answer giving the mechanism without the number is fully correct and an answer quoting the number as its own expected value is WRONG."
+  }
+}

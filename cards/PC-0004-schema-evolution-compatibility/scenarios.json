@@ -1,0 +1,212 @@
+{
+  "card": "PC-0004",
+  "note": "Run history lives here and never in card.json -- recording that a card was tested must not invalidate the runs that tested it. Use ../../run_scenarios.py --prepare SID, which captures sha256(card.json) BEFORE the consumer sees anything.",
+  "scenarios": [
+    {
+      "id": "SC-01-planning-three-changes-one-release",
+      "kind": "planning",
+      "prompt": "Our Orders team wants to ship three schema changes in next week's release, and the schema registry's compatibility check passed all three.\n\n1. Rename `amount_cents` to `amount_minor` in the OrderEvent protobuf published to four internal consumers, two of which we do not own.\n2. Alphabetise the columns in the nightly orders CSV export, which a downstream reconciliation job reads, edits one status column in, and writes back to the same bucket.\n3. Change `amount_cents` from int64 to int32 in the OrderEvent protobuf, because the largest order we have ever taken is 4.2 million cents and int32 holds two billion.\n\nAll three are one-line diffs. Tell us which are safe, what deploy order each needs, and what we must check that the compatibility checker did not.",
+      "rubric": {
+        "must_flag_anti_patterns": [
+          "A2",
+          "A3",
+          "A5"
+        ],
+        "must_cite_constraints": [
+          "C1",
+          "C2",
+          "C5"
+        ],
+        "must_flag_naive_scan_via_edge": {
+          "from": 6,
+          "to": 3
+        },
+        "must_take_escalation_exit": "do not narrow the column",
+        "must_route_each_change": {
+          "rename_on_tagged": "no shape needed -- 'either' order, ship it",
+          "rename_if_a_name_keyed_path_exists": "S2, because two of four readers are unowned and the contract can never be completed",
+          "csv_reorder_on_positional": "S3 (or leave the card) -- S1.limit excludes positional",
+          "narrowing": "escalation exit 'do not narrow the column'"
+        },
+        "must_engage_A4_read_modify_write": "credit EITHER the fix (retention, or forbid read-modify-write on a lagging reader) OR a detector (field-population-rate reconciliation). Do NOT require a monitor: A4's own symptom says nothing raises and the card gives no detection guidance, and 3 of 3 consumers prescribed the fix."
+      },
+      "scoring_notes": "A strong answer separates the three by CODEC first (C1) rather than by change. (1) is a rename on a TAG-keyed codec and is therefore safe -- the trap is answering 'renames are dangerous' from a general prior; C2's mirror is the point, and a consumer that flags A3 without noticing protobuf keys on numbers has recited rather than reasoned. (2) is a reorder on a POSITIONAL codec: A2, silently wrong in both directions, IMPOSSIBLE, and additionally an A4 read-modify-write path where retention is structurally unavailable -- the answer should notice both, and that the CSV job is the monitoring target. (3) is A5 and the sharpest: the registry passed it because narrowing's safety is in the VALUES (C5), and the 4.2-million-cents anecdote is exactly the reasoning the measurement contradicts. Full credit requires the 6->3 edge: node 3 cannot be completed from the schemas alone.",
+      "observed_history": [
+        {
+          "result": "pass",
+          "notes": "Rubric 4 of 6 clean plus 2 partial. Flagged A2 A3 A5 plus A1 A4 A6 A7; cited C1 and C5 by ID; stated C2 rename/renumber mirror content verbatim but attributed it to A3; selected S1; hit edge 6 to 3\nwith a sharper framing than the card (information absent from the registry INPUT not its logic); took the do-not-narrow escalation. PARTIAL on monitoring-from-A4: used A4 correctly and named the reconciliation\njob as the target but prescribed a fix rather than a monitoring signal. All quoted figures exact (A4 1000/1000 with 0 raised and positional retention structurally impossible, A5 100/1000 with matrix SAFE and both\nresults correct, A7 12/15 = 0.80 with all 3 raisers being A6). Consumed the card authoring-honesty note about the tautological oracle and applied it as test guidance. Verified-correct beyond-card additions:\nprotobuf varint means int32/int64 are byte-identical so narrowing saves zero bytes and the motivation is void, int32 caps at 21.47M dollars, JPY zero and KWD three decimals, 300M IDR is 30B minor units, json_name\npinning, lost-update hazard on same-bucket read-modify-write, and the CSV export is probably not a registry subject so the green check is vacuous for change 2. NO NEW CARD DEFECT FOUND. ONE OVER-GENERALISATION:\nquoted 100 of 1000 rows silently wrong while dropping the conditioning clause when only 10 percent of rows exceeded INT32_MAX, turning an all-overflowing-rows-fail claim into an apparent 10 percent failure rate.\nThis CORROBORATES the PC-0001 structural-vs-prose hypothesis from a second card and a second consumer: A5 has no generalizes field and its conditioning sits in prose. Portfolio audit: 17 of 19 elements carrying\nnumeric measured figures lack a structural generalizes field, 89 percent.",
+          "conditions": {
+            "model_class": "opus-class",
+            "input_scope": "card.json only -- no CARD.md, no impl/, no tests/, no repo",
+            "consumer_prior_exposure": "none -- fresh session, first message, no access to the authoring conversation",
+            "harness": "run_scenarios.py --prepare/--record (hash captured at prepare)",
+            "card_state_at_run": {
+              "card_json_sha256": "7a95ec2c4446",
+              "prepared_at": "2026-09-09T11:04:59+00:00"
+            }
+          }
+        },
+        {
+          "result": "pass",
+          "notes": "AFTER arm of the conditioning dose test; wrapper byte-identical to run 1 (dabfb32bf04508de), card body +3237 chars. PRE-REGISTERED OBSERVABLE RESOLVED CONDITIONED = POSITIVE: run 1 quoted 100 of 1000\nrows silently wrong bare, run 2 states the conditioning explicitly, names the generalizes field, and gives the transferable conditional claim that 100 percent of out-of-range values truncate silently and 0\npercent raise while the 10 percent is fixture-specific. Dose response visible on THREE of the six edited elements, each echoing distinctive authored phrasing: A5 most over-quotable, A4 not about 100 percent, A7\nexact over this enumeration. Rubric improved 4 of 6 clean to 5 of 6: C2 now cited by ID where run 1 attributed its content to A3, and C6 gained its ID. Still partial on monitoring-from-A4, prescribing a fix\nrather than a monitoring signal. ATTRIBUTION: the two answers are near-isomorphic in verdicts, structure, gap table, sequencing and all beyond-card additions, diverging only at the edited elements, which is the\nstrongest evidence available at n=1 per arm. HONEST LIMIT: this establishes TRANSMISSION not reasoning. The consumer relayed authored text near-verbatim, and I wrote both the field and the scoring criterion, so\nverbatim echo is the cheapest way to satisfy my own observable. A stronger test must require the conditioning to be APPLIED to a case the field does not describe. Also run 2 dropped run 1 insight that the\nsingle-record matrix reports narrow_type SAFE, so the added text may have crowded out a genuine observation; n=1, noted not claimed.",
+          "conditions": {
+            "model_class": "opus-class",
+            "input_scope": "card.json only -- no CARD.md, no impl/, no tests/, no repo",
+            "consumer_prior_exposure": "none -- fresh session, first message, no access to the authoring conversation",
+            "harness": "run_scenarios.py --prepare/--record (hash captured at prepare)",
+            "card_state_at_run": {
+              "card_json_sha256": "dcb200282d7c",
+              "prepared_at": "2026-09-09T11:40:28+00:00"
+            }
+          }
+        },
+        {
+          "result": "pass",
+          "notes": "8/8 on the SOUND rubric items, and it exposed TWO unsound ones. PASSED: A2 (positional reorder is a tidy-up that reviews as whitespace and corrupts data), A3 (renumbering on tag-keyed is the exact MIRROR of renaming on JSON), A5 (narrowing, four independent arguments), C1 (codec identity undefined per-format, different for the proto and the CSV), C2 (the mirror), C5 near-verbatim ('the data the verdict requires is absent from the checker's input -- its logic isn't wrong, it was never given the facts'), the 6->3 decomposition edge (node 3 needs a MAX() over full retained history, not a dashboard or sample), and the 'do not narrow' escalation exit ('never narrow a live field'). RUBRIC DEFECT A -- must_select_shape=S1 is WRONG for this scenario, by the card's own text. S1.limit says a positional codec cannot hold a widened row so S1 DEGRADES TO S3 there, which covers change 2. S2.when is 'one or more readers are outside your control' and the prompt says two of four consumers are unowned, which covers change 1's unsafe branch. S3.when is 'the codec is positional'. Change 3 goes to escalation. So S1 is correct for NONE of the three, and the consumer was right not to select it -- it even reached S2's reasoning independently: 'with one reader outside your control you lose the ability to ever complete a contract phase, so any mitigation becomes permanent'. RUBRIC DEFECT B -- must_build_monitoring_from=A4 is unanswerable as the card scaffolds it, and this is now 3 of 3 consecutive runs prescribing a FIX rather than a monitor. A4's own symptom is 'no error, no exception and no log line at any point' and its generalizes says 'nothing in the pipeline will tell you'. The card states A4 emits no signal, offers a fix and no detection guidance, and the rubric then demands monitoring be derived from it. Three independent opus-class consumers all doing the same thing is evidence the card does not afford the answer. UNPROMPTED AND STRONG: (a) a CSV is positional or name-keyed according to the READER, not the file -- DictReader/pandas is safe, csv.reader/awk/COPY is not, and warehouse bulk loaders are positional by default; (b) TWO WRITERS of the same artifact disagreeing about column order, so 'whichever runs last defines the file' and the alphabetised export may not survive the night; (c) change 1 REFUTES change 3 -- renaming to amount_minor implies multi-currency, and INT32_MAX minor units is ~86k USD in VND, so adding a currency breaks it rather than growing an order; (d) varint means int32 and int64 are byte-identical, so the narrowing buys a permanent ceiling for ZERO storage saving; (e) retained topics make narrowing RETROACTIVE -- replaying history truncates it; (f) the two changes touch the same field in one release, so dashboards lose continuity exactly when needed to spot truncation; (g) generated-code breakage is a LOUD break in two unowned teams' builds, and loud is cheap. TRANSMISSION NOTE: it relayed the absent-vs-zero presence caveat added to this card EARLIER THIS SESSION, which confirms the fix transmits but is relay, not independent derivation.",
+          "conditions": {
+            "model_class": "opus-5",
+            "input_scope": "card.json only (34,626-char artifact); rubric and scoring_notes withheld",
+            "consumer_prior_exposure": "none -- fresh session, no repo or thread access, artifact pasted verbatim",
+            "harness": "run_scenarios.py --prepare/--record (hash captured at prepare)",
+            "card_state_at_run": {
+              "card_json_sha256": "0c4963755234",
+              "prepared_at": "2026-09-10T06:34:51+00:00"
+            }
+          }
+        },
+        {
+          "result": "pass",
+          "notes": "CROSS-CARD TEST OF THE INFERENCE-PAIRING RULE: PRE-REGISTERED PREDICTION FAILED ON BOTH HALVES. Pre-registered discriminators, sealed at 4e4b15afbc56 before either arm ran: predicted CARD >=2/3 and CONTROL <=1/3, with the gap EXCEEDING PC-0005 SC-04's +1.0 because PC-0004 is 83% inference-paired vs PC-0005's 41%. OBSERVED: CARD 1.5/3, CONTROL 1.5/3, GAP +0.0. E1 card 1.0 vs control 0.5 (card named the measurement -- 'MAX(ABS(amount_cents)) over full retained history, not a sample', 'an anecdote, not a query result'; control named only the category, 'your data distribution'). E2 INVERTED, card 0.5 vs control 1.0 -- the CONTROL found the unrecoverability the card missed: 'writes the corrupted file back over the same object ... your recovery option is bucket versioning/backup, not a re-run'; the card arm relayed A4's '100% of the time, zero errors raised' but never reached the rollback consequence. E3 0.0 both arms -- neither reached retroactivity-on-replay; that item is a card-content gap, not a consumer miss. EXISTING 6-ITEM RUBRIC (scored unchanged for comparability with runs 1-3): ~5/6, 4 clean + 2 partial -- missed C2's rename/renumber MIRROR entirely, and missed the S2 branch where two unowned readers of four make the contract permanently uncompletable. That is the SAME 5/6 band as opus run #2, i.e. the existing rubric does NOT separate sonnet-with-card from opus-with-card, which is further evidence those items are saturated. THE CONFOUND I DID NOT CONTROL FOR, and it explains BOTH experiments better than inference-pairing does: DOMAIN PRIOR STRENGTH. PC-0004's content -- protobuf tag-keying, varint encoding, positional CSV parsing -- is heavily documented public knowledge, so a sonnet-class prior already holds it. PC-0005's content -- suppression arithmetic, what deserves a page -- is idiosyncratic and organizational, so the prior is weak. One variable predicts +1.0 on PC-0005 SC-04 and +0.0 here. DIRECT EVIDENCE: the control independently produced varint-means-zero-saving, json_name pinning, positional silent shift, and same-bucket unrecoverability -- all card content -- and produced one thing the CARD ARM MISSED (see below). This does NOT refute inference-pairing (D1/D4 flipped 3/3 on PC-0005 with control held item-for-item constant) but it does refute the claim that pairing PREDICTS card advantage across cards. Card value now looks like a function of domain obscurity, which is a more actionable selection criterion for which cards are worth building at all. POSSIBLE CROWD-OUT, n=2, flagged not claimed: the card arm scored BELOW control on E2, and PC-0004 run #2 independently noted 'the added text may have crowded out a genuine observation'. Second observation on the same card; needs a designed test, not more anecdote. NEW ENRICHMENT FROM THE CONTROL ARM, not in the card: narrowing int64->int32 narrows the GENERATED ACCESSOR type, so consumer-side arithmetic can overflow even when every stored value fits -- 'long total = amount_cents * quantity overflows in 32-bit before assignment' in Java. A5 is entirely about values AT REST; this is a distinct failure surface in code you do not own and cannot audit. Fourth consumer-sourced enrichment on PC-0004.",
+          "conditions": {
+            "model_class": "sonnet 5",
+            "input_scope": "CARD arm: card.json @4e4b15afbc56 (39,194 chars) + prompt. CONTROL arm: prompt only (924 chars), verified 0 card element IDs and 0 card vocabulary; request text byte-identical across arms (sha256 8244a8b9e89d)",
+            "consumer_prior_exposure": "none -- two separate fresh sonnet 5 sessions, control run first, neither session saw the other",
+            "harness": "run_scenarios.py --prepare/--record (hash captured at prepare)",
+            "card_state_at_run": {
+              "card_json_sha256": "4e4b15afbc56",
+              "prepared_at": "2026-09-11T09:10:25+00:00"
+            }
+          }
+        }
+      ],
+      "_rubric_defect_found_by_running": "TWO defective items, found by run #3 and by 3-of-3 agreement across runs. (A) must_select_shape=S1 was satisfied by NONE of the three changes. Per the card's own matrix the protobuf rename is 'either' so needs no shape; the CSV reorder is IMPOSSIBLE *and* positional, and S1.limit says S1 degrades to S3 there; the rename's unsafe branch is IMPOSSIBLE but two of four readers are unowned, which is precisely S2.when; and the narrowing goes to an escalation exit. The rubric demanded a shape the card routes away from in every branch. Replaced with per-change routing. (B) must_build_monitoring_from=A4 is unanswerable as scaffolded. A4.symptom is 'no error, no exception and no log line at any point' and A4.generalizes says 'nothing in the pipeline will tell you'; A4 offers a fix and NO detection guidance. Three consecutive independent opus-class consumers all prescribed the fix. That is evidence the card does not afford the answer, not three identical consumer errors. Item relaxed to accept either a fix or a detector. THE UNDERLYING CARD GAP REMAINS OPEN: A4 should tell the reader how to SEE it -- a field-population-rate reconciliation is the only observable, since nothing raises -- on a card whose purpose includes knowing when you have gone wrong.",
+      "_sonnet5_experiment_preregistration": {
+        "why_this_card": "The inference-pairing rule was DERIVED from PC-0005 and VALIDATED on PC-0005. That is circular. PC-0004 has the portfolio's highest inference coverage (83% vs PC-0005's 41%) and was NOT used to derive the rule, so it is the honest generalisation test. PC-0004 also has ZERO valid baselines: all six recorded runs are at stale hashes AND all six are opus-class, the tier at which the control experiment showed cards are near-free.",
+        "why_this_scenario": "SC-01 carries a MAGNITUDE TRAP structurally identical to SC-04's D2: the prompt offers 'largest order ever is 4.2 million cents and int32 holds two billion' as a number that appears to license narrowing. It is also the number-heaviest scenario on the card (A4, A5, A7 all live), so it is where inference-pairing should show if it shows anywhere.",
+        "scoring_rule": "Score the EXISTING 6 rubric items unchanged, for comparability with runs 1-3. Score these three discriminators SEPARATELY as the experiment's primary metric. Do not merge the two.",
+        "discriminators": {
+          "E1_locates_the_missing_measurement": "Rejects the 4.2M-cents headroom argument by naming the ABSENT DATA -- a MAX() over full RETAINED history, not a sample, dashboard or recent window -- rather than by general risk aversion ('narrowing is risky', 'headroom arguments are fragile'). Card elements: C5 (narrowing's safety lives in the VALUES, absent from the checker's INPUT) and decomposition edge 6->3 (node 3 cannot be completed from the schemas alone). FREE-ANSWER GUARD: 'don't narrow, it's risky' scores 0. The credit is for locating WHICH measurement is missing.",
+          "E2_read_modify_write_is_unrecoverable": "Identifies that change 2's read-modify-write path is not merely silent but UNRECOVERABLE: the reconciliation job writes back to the SAME bucket, so the corrupted output overwrites its own source and there is no prior version to roll back to, with 0 errors raised. Card element: A4 (1000/1000 rows wrong, 0 raised, retention structurally unavailable on positional). FREE-ANSWER GUARD: 'column order matters for positional readers' scores 0 -- that is general knowledge. Credit requires the overwrites-its-own-source consequence.",
+          "E3_narrowing_is_retroactive": "Notes that narrowing is RETROACTIVE on retained data -- replaying or re-reading existing history truncates it -- so the change is not bounded to future writes. Card element: A5 plus retention. FREE-ANSWER GUARD: flagging future overflow only scores 0."
+        },
+        "prediction": "CARD arm >= 2 of 3 discriminators. CONTROL arm <= 1 of 3. Directional prediction: because PC-0004's numbers are ALREADY well-paired with their decisions (83%), the card arm should beat control by MORE than PC-0005 SC-04's +1.0, whose card was 41% paired at the time.",
+        "falsification": "If CONTROL scores >= 2 of 3, PC-0004 SC-01 does not discriminate at sonnet 5 and I report that rather than reaching for a rescue. If CARD scores <= 1 of 3 DESPITE 83% inference coverage, the inference-pairing rule is PC-0005-specific and must be restated as such. Either outcome is reportable; only a silent re-scoring after seeing the replies is not.",
+        "declined_action_and_why": "I proposed promoting hard_credit to primary scoring across PC-0004 and then declined it on reading the file. Two errors in the proposal: (a) PC-0004 is not the all-reference-checks case I described -- must_route_each_change and must_identify are already substantive claim items, both added by earlier defect fixes; (b) changing the denominator would make runs 1-3 incomparable with all future runs, which is real instrument damage for a gain that is purely bookkeeping, since promotion changes scoring rather than consumer output. Pre-registering the discriminators separately achieves the same sensitivity at zero cost to the record.",
+        "registered_at_card_hash": "4e4b15afbc56",
+        "arms": {
+          "card": "sonnet 5",
+          "control": "sonnet 5"
+        }
+      }
+    },
+    {
+      "id": "SC-02-refusal-single-writer-single-reader",
+      "kind": "planning",
+      "prompt": "We have a settings file written by one batch job and read by one service. Both are built from the same repository, deployed together by the same pipeline, and the pipeline stops the job before it replaces the service. We are about to remove two fields and rename a third, and we would like the compatibility analysis and the three-phase migration plan before we proceed.",
+      "rubric": {
+        "must_identify": "the version window survives the atomic code deploy because the FILE outlives it -- the new reader's first read is necessarily of a file the old writer produced",
+        "must_cite_do_not_use_when": [
+          "exactly one writer and one reader deployed atomically together"
+        ],
+        "must_select_shape": "S1",
+        "must_cite_constraints": [
+          "C1"
+        ],
+        "must_flag_anti_patterns": [
+          "A1",
+          "A3"
+        ],
+        "must_take_escalation_exit": "you cannot determine what the codec keys on",
+        "hard_credit": [
+          "REJECTS the one-writer-one-reader exclusion, with the reason: the file is persisted, so it outlives the deploy and the new reader's first read is of old-writer output. Full credit requires rejecting the exclusion, not merely noting an exception to it",
+          "observes that the pipeline's own safe ordering -- stop the job, then replace the service -- is what GUARANTEES the unsafe window rather than preventing it",
+          "names the rollback direction as a second window: a service-only rollback puts an old reader in front of a new-format file",
+          "settles the codec question before issuing verdicts, and gives DIFFERENT verdicts for name-keyed, tag-keyed and positional rather than one answer",
+          "notes that the atomicity guarantee is a property of the PIPELINE, not of the code -- a manual or scheduled job run during rolling replacement puts a new-format file in front of old instances",
+          "requires the retired names or tags on a permanent do-not-reuse list (A1): the removals are safe now and dangerous at the next reuse"
+        ],
+        "_rubric_defect_found_by_running": "This scenario was authored as a REFUSAL with must_not_select_shape=S1 and hard_credit requiring the consumer to decline in one sentence and NOT produce a phased plan. All of that was wrong, because do_not_use_when[0] was wrong: it claimed atomic deployment removes the version window, which is false for a persisted file. A correct naive answer scored 1/2 and 1/3 against the old rubric. The static gate could not catch this -- every expectation resolved to a real card element, and the card element itself was the defect. Only running it could, which is the strongest argument in this project's record for consumer runs over static validation."
+      },
+      "scoring_notes": "The correct answer is 'fewer phases than the card's default, but not one'. Two windows are live: new-reader x old-file on every deploy until the new job's first successful run, and old-reader x new-file on any service-only rollback. A strong answer settles the codec first (name-keyed makes the rename SILENT_WRONG and one-hop IMPOSSIBLE; tag-keyed makes it free but puts the risk on the removals via tag reuse; positional makes the removals structurally unsafe and sends you to the escalation), then gives a reduced expand/migrate/contract in which the job's next run IS the backfill. The single-deploy alternative is legitimate but only by changing the pipeline so the new job writes the new-format file before the new service takes traffic -- and it trades a deploy risk for a rollback risk, since rolling back the service now requires rolling back the data too.",
+      "observed_history": [
+        {
+          "result": "scenario-invalid",
+          "notes": "NOT A CONSUMER FAILURE. The consumer is correct and the CARD is wrong. Strict rubric score is 1 of 2 plus 1 of 3 hard credit, but that score is invalid because the rubric encodes a card defect.\ndo_not_use_when item 1 says exactly one writer and one reader deployed atomically together means there is no version window so none of this applies. That is false for a PERSISTED artifact: atomic deployment\nremoves concurrent CODE versions but not writer-reader version skew, because the file outlives the deploy. The pipeline stops the job then replaces the service, so at the moment the new service starts the file on\ndisk was necessarily written by the old job, giving a new-reader-times-old-data window on every deploy until the new job first runs, plus an old-reader-times-new-file window on any service-only rollback. The\nconsumer stated exactly this and observed that the ordering adopted to make the deploy safe is what guarantees the unsafe window. For anything at rest the skew is bounded by DATA lifetime, not deploy atomicity.\nConsequences: must_not_select_shape S1 is wrong for this scenario, HC1 declines in one sentence is wrong, HC3 does not produce expand-migrate-contract is wrong. It DID hit HC2, that the atomicity guarantee is a\nproperty of the PIPELINE not the code, and independently added the mid-deploy trigger case where a manual or scheduled job run during rolling replacement puts a new-format file in front of old instances. Recorded\nas scenario-invalid so it does not count as a validation. Also caught instrument bug 11 while preparing this record: run_report VALID naive baselines never checked result, so this row would have counted as a\nvalidation; fixed and mutation-verified.",
+          "conditions": {
+            "model_class": "opus-class",
+            "input_scope": "card.json only -- no CARD.md, no impl/, no tests/, no repo",
+            "consumer_prior_exposure": "none -- separate session unaware of the authoring conversation",
+            "harness": "run_scenarios.py --prepare/--record (hash captured at prepare)",
+            "card_state_at_run": {
+              "card_json_sha256": "dcb200282d7c",
+              "prepared_at": "2026-09-09T19:49:30+00:00"
+            }
+          }
+        },
+        {
+          "result": "pass",
+          "notes": "FIRST VALID BASELINE FOR THE CORRECTED CARD. 6/6 strict rubric, 5/6 hard credit. Hit must_identify verbatim (file outlives deploy; new reader's first read is of old-writer output), rejected the one-writer-one-reader exclusion outright, named BOTH windows including the service-only rollback, settled the codec before issuing verdicts and gave three DIFFERENT verdicts, engaged C1 (compatibility is change-vs-codec, absent from the diff), A3 (name-keyed rename SILENT_WRONG both ways so no ordering exists), A1 (permanent do-not-reuse list, not review memory), took escalation exit 1 with the card's own 20-line experiment, and selected S1 as a reduced 3-phase/2-deploy plan where the job's next run IS the backfill -- exactly what scoring_notes anticipated. MISS: hard_credit item 5, that atomicity is a property of the PIPELINE not the code (a manual or scheduled job run during rolling replacement); it mentioned ops scripts and canaries but only as read-modify-write paths. UNPROMPTED: flagged read-modify-write, type-narrowing, a schema_version key, and correctly reproduced claim_strength=direction while distinguishing structural from fixture-dependent claims. FOUND A SECOND CARD DEFECT: refused to reuse the card's remove_field=SAFE cell for a NON-TERMINAL positional removal. Verified by audit_positional_removal.py -- changes.remove_field drops f.status which is the LAST field of BASE, so the positional cell only ever tested terminal removal; a middle-column removal measures SILENT_WRONG in BOTH directions (= IMPOSSIBLE). S2.measured overclaims. Card fix follows this record, deliberately in that order.",
+          "conditions": {
+            "model_class": "unspecified -- operator did not disclose; ask before citing",
+            "input_scope": "card.json only (31,541-char artifact); rubric and scoring_notes withheld",
+            "consumer_prior_exposure": "none -- fresh session, no repo or thread access, artifact pasted verbatim",
+            "harness": "run_scenarios.py --prepare/--record (hash captured at prepare)",
+            "card_state_at_run": {
+              "card_json_sha256": "4cf923bd18d6",
+              "prepared_at": "2026-09-10T05:43:33+00:00"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "SC-03-refusal-cached-render-schema-change",
+      "kind": "refusal",
+      "prompt": "We cache rendered product pages in Redis as serialized protobuf with a 15-minute TTL. We are adding two fields and renaming one in the cached message. Give us the compatibility analysis and the phased rollout so we do not serve corrupt pages during the deploy.",
+      "rubric": {
+        "must_cite_do_not_use_when": [
+          "the payload is a cache entry that may be discarded"
+        ],
+        "must_not_select_shape": "S1",
+        "hard_credit": [
+          "gives the cheap correct action -- bump the cache key namespace or serialization version prefix so old and new entries cannot collide -- instead of a phased schema migration",
+          "uses the TTL to bound the problem: the entire old-format population is gone within one TTL, so there is no window left to manage",
+          "notices the SECOND independent reason there is no problem: protobuf is tag-keyed, so added fields and a tag-preserving rename are wire-safe regardless of the cache argument. Credit an answer that separates the two reasons rather than merging them",
+          "flags the single condition that would void the exclusion: if anything treats the cache as a system of record -- a read-through that writes back, or a warm start that seeds durable state from cache -- then it is not discardable and the card applies",
+          "does NOT produce expand/migrate/contract, a backfill, or a reserved-identifier list"
+        ]
+      },
+      "scoring_notes": "This replaces the over-application test that SC-02 used to carry, on an exclusion that actually holds. The failure mode is a card flattered by being applied: three deploys and a backfill are real advice, correct in general, and pure cost against a 15-minute cache. Note the deliberate trap -- the request says 'so we do not serve corrupt pages', which presupposes a corruption risk that does not exist here. A consumer that accepts the premise and designs around it has pattern-matched on 'schema change' twice over.",
+      "observed_history": [
+        {
+          "result": "pass",
+          "notes": "FIRST RUN of this scenario. Strict 2/2: cited the discardable-cache exclusion ('entries are discardable, a freedom a database or file does not give you') and did NOT select S1 -- recommendation is 'one deploy, either order, no phases'. Hard credit 3 FULL + 2 PARTIAL of 5. FULL: (1) cache-key namespace bump, page:v7 -> page:v8, named 'strictly better than the classic three-deploy migration'; (2) TTL bounds the window to 15 min; (3) separated the TWO independent reasons cleanly -- led with tag-keyed wire-safety, then the cache argument as a distinct freedom. PARTIAL: (4) found the read-modify-write mechanism exactly (cache-warmer, partial-invalidation path, edge worker) but framed it as an ORTHOGONAL data-loss risk rather than as the condition that VOIDS the discardable exclusion -- right mechanism, wrong logical role; (5) did produce expand/contract AND a reserved-identifier list, so the letter of 'does NOT produce expand/migrate/contract' is violated, though the spirit is honoured -- it leads with 'you probably don't need one' and gates the phased plan behind a failed precondition. Refused the prompt's premise correctly. FOUND A THIRD CARD DEFECT, unprompted: add_optional is SAFE at the CODEC level but the new field is absent on every pre-existing record, and on proto3 without explicit presence the reader cannot distinguish 'absent because an old writer wrote this' from a legitimate zero -- so a renderer reading 0 stock or 0.00 price as real data serves a wrong page with a green deploy and flat error rate. The card claims add_optional is 'the only structural change SAFE in all 6 cells' with no application-level caveat, and its own roundtrip oracle DEFINES absence-to-default as SAFE. Verification pending.",
+          "conditions": {
+            "model_class": "opus-5",
+            "input_scope": "card.json only (32,653-char artifact); rubric and scoring_notes withheld",
+            "consumer_prior_exposure": "none -- fresh session, no repo or thread access, artifact pasted verbatim",
+            "harness": "run_scenarios.py --prepare/--record (hash captured at prepare)",
+            "card_state_at_run": {
+              "card_json_sha256": "11aa3235a53b",
+              "prepared_at": "2026-09-10T06:15:47+00:00"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "scoring_conventions": {
+    "must_cite_constraints_and_must_flag_anti_patterns": "These list elements the answer must ENGAGE WITH. Naming the identifier is NOT required and must NOT be required. Credit an answer that uses a constraint's content correctly even if it never writes the ID, and do not credit an answer that names an ID without using it. Recorded after three consecutive runs hit content without the label: PC-0004 SC-01 run 1 and PC-0003 SC-01 run 1 both used C2's mirror argument unnamed, and PC-0005 SC-03 run 1 used C3 and A3 unnamed while naming six other IDs. Scored literally, the rubric was marking down correct reasoning for failing to recite a label.",
+    "figures_in_rubric_text": "Where a rubric quotes a measured figure, it is there to identify WHICH finding is meant, never to require the consumer to reproduce the number. If the element's `generalizes` says the figure does not transfer, an answer giving the mechanism without the number is fully correct and an answer quoting the number as its own expected value is WRONG."
+  }
+}

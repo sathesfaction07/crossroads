@@ -1,0 +1,431 @@
+{
+ "id": "PC-0001",
+ "title": "Near-duplicate detection at scale",
+ "domains": [
+  "ai-ml-engineering",
+  "software-engineering"
+ ],
+ "status": "complete",
+ "authored": "kb-authored",
+ "card": "CARD.md",
+ "one_line": "Find near-duplicate groups among N items and pick one survivor per group, without comparing every pair.",
+ "recognition_signals": [
+  {
+   "observable": "dedup job runtime grows ~4x when input doubles",
+   "implies": "quadratic in N",
+   "evidence": "reasoned",
+   "grounding": "analytic"
+  },
+  {
+   "observable": "exact-hash/DISTINCT dedup is clean but duplicates persist downstream",
+   "implies": "duplicates are near, not exact",
+   "evidence": "reasoned",
+   "grounding": "analytic"
+  },
+  {
+   "observable": "output changes when the input is shuffled",
+   "implies": "order-dependent survivor selection",
+   "evidence": "executed",
+   "grounding": "synthetic-fixture"
+  },
+  {
+   "observable": "a duplicate cluster contains items a human calls unrelated",
+   "implies": "transitive chaining",
+   "evidence": "executed",
+   "grounding": "synthetic-fixture"
+  },
+  {
+   "observable": "a small threshold change causes a large swing in removal count",
+   "implies": "operating on the LSH knee, where retrieval at your own threshold is well below certainty",
+   "evidence": "executed",
+   "grounding": "analytic",
+   "measured": {
+    "P_retrieve_true_J_0695": {
+     "th_0.65": 0.5916,
+     "th_0.70": 0.4172,
+     "th_0.75": 0.1836,
+     "th_0.80": 0.0767
+    }
+   },
+   "CORRECTION": {
+    "previous_implied": "recall is ~0.61",
+    "status": "SCOPED -- figure inherited from the retracted divisor model; the observable itself is confirmed and strong"
+   }
+  },
+  {
+   "observable": "cost dominated by comparison, not embedding generation",
+   "implies": "no candidate-generation stage",
+   "evidence": "reasoned",
+   "grounding": "analytic"
+  }
+ ],
+ "solution_shapes": [
+  {
+   "id": "A",
+   "name": "MinHash + LSH banding",
+   "implemented": true,
+   "choose_when": "similarity is set-shaped (tokens/shingles); need a tunable recall/cost knob; no vector DB available",
+   "metric_semantics": "jaccard"
+  },
+  {
+   "id": "B",
+   "name": "ANN index (HNSW / IVF-PQ)",
+   "implemented": false,
+   "choose_when": "dense embeddings already exist and cosine is correct; N large enough to amortise index build",
+   "metric_semantics": "cosine"
+  },
+  {
+   "id": "C",
+   "name": "Deterministic blocking key",
+   "implemented": false,
+   "choose_when": "a high-precision business key exists; cheapest and most explainable option",
+   "metric_semantics": "exact-key + within-block similarity"
+  },
+  {
+   "id": "D",
+   "name": "Sorted-neighbourhood window",
+   "implemented": false,
+   "choose_when": "streaming or memory-bound; window-boundary misses acceptable",
+   "metric_semantics": "any"
+  }
+ ],
+ "selection_rule": {
+  "text": "If a deterministic blocking key exists use C. Else A when similarity is set-shaped, B when vector-shaped. D only under memory pressure.",
+  "evidence": "reasoned",
+  "grounding": "analytic"
+ },
+ "rejected": [
+  {
+   "option": "exact hashing",
+   "why": "cannot see near-duplicates; a one-character edit changes the hash"
+  },
+  {
+   "option": "sort by similarity and take runs",
+   "why": "similarity is not a total order"
+  },
+  {
+   "option": "lower the threshold until enough is caught",
+   "why": "converts a recall problem into a chaining problem that aggregate metrics hide"
+  },
+  {
+   "option": "SimHash",
+   "why": "viable for Hamming/cosine text; rejected only because Jaccard is exactly checkable against naive ground truth, enabling executed claims"
+  },
+  {
+   "option": "vector DB",
+   "why": "a peer (Shape B), not worse; not used as the implementation because it cannot run stdlib-only"
+  }
+ ],
+ "decomposition": {
+  "nodes": [
+   {
+    "n": 1,
+    "name": "blocking",
+    "module": "impl/blocking.py",
+    "in": "list[set[str]]",
+    "out": "set[frozenset[int]]",
+    "cost": "O(N * num_perm)",
+    "owns_risk": "missed pairs (recall)"
+   },
+   {
+    "n": 2,
+    "name": "scoring",
+    "module": "impl/scoring.py",
+    "in": "set[frozenset[int]]",
+    "out": "list[tuple[int,int,float]] desc by score",
+    "cost": "O(C)",
+    "owns_risk": "false positives"
+   },
+   {
+    "n": 3,
+    "name": "clustering",
+    "module": "impl/clustering.py",
+    "in": "list[tuple[int,int,float]]",
+    "out": "list[set[int]]",
+    "cost": "O(C * alpha)",
+    "owns_risk": "transitive chaining"
+   },
+   {
+    "n": 4,
+    "name": "canonical",
+    "module": "impl/canonical.py",
+    "in": "list[set[int]]",
+    "out": "dict[int, list[int]]",
+    "cost": "O(sum k^2)",
+    "owns_risk": "order dependence"
+   }
+  ],
+  "edges": [
+   {
+    "from": 2,
+    "type": "requires",
+    "to": 1,
+    "why": "scoring without blocking IS the naive algorithm"
+   },
+   {
+    "from": 3,
+    "type": "requires",
+    "to": 2,
+    "why": "clustering unscored candidates imports LSH false-positive rate"
+   },
+   {
+    "from": 4,
+    "type": "requires",
+    "to": 3,
+    "why": "a survivor is only meaningful per cluster"
+   },
+   {
+    "from": 4,
+    "type": "conflicts-with",
+    "to": "greedy-keep-first",
+    "why": "fusing stages 3 and 4 loses cluster structure and determinism"
+   }
+  ],
+  "order_is_forced": {
+   "text": "each stage strictly narrows the input to the next",
+   "evidence": "reasoned",
+   "grounding": "analytic"
+  }
+ },
+ "cost_model": {
+  "formula": "P(candidate) = 1 - (1 - s**rows)**bands",
+  "knee": "(1/bands)**(1/rows)",
+  "invariant": "bands * rows == num_perm",
+  "constraints": [
+   {
+    "id": "C1",
+    "claim": "recall AT the requested threshold is far below 1.0 -- about 0.42, not ~1.0 That means the threshold names where the S-curve is centred rather than a recall floor, so do not quote it to a caller as a guarantee.",
+    "evidence": "executed",
+    "grounding": "analytic",
+    "measured": {
+     "analytic_P_at_datasketch_choice": 0.4382,
+     "empirical_600_real_minhash_pairs": 0.42,
+     "at": {
+      "requested_threshold": 0.7,
+      "num_perm": 128,
+      "selected_bands": 14,
+      "selected_rows": 9,
+      "true_jaccard_of_fixture_pairs": 0.695
+     }
+    },
+    "measured_on": {
+     "what": "real datasketch 2.0.0 MinHash objects, 600 synthetic pairs built to a known Jaccard. The (b,r) split is whatever datasketch selects, not one chosen by hand.",
+     "population": "executed-against-real-library"
+    },
+    "generalizes": "the MECHANISM generalises -- retrieval at the requested threshold is far below certainty for any caller. The FIGURE is specific to threshold 0.70 at num_perm=128 and must be recomputed for other settings. That means the mechanism licenses a design rule while the figure licenses nothing outside its own setting, so never carry the number to a different num_perm.",
+    "CORRECTION": {
+     "previous": "recall ~0.61, measured 0.6133, at bands=16 rows=8",
+     "status": "SCOPED -- the number was right for a configuration datasketch never selects",
+     "why": "(16,8) is a divisor pair of 128, chosen under the retracted b*r == num_perm assumption. datasketch selects (14,9) for threshold 0.70. (16,8) is in fact its choice for threshold 0.65, so the old figure was attached to the wrong threshold.",
+     "effect": "the old figure UNDERSTATED the problem by about 45%. The correction makes the hazard larger, not smaller.",
+     "root_cause_shared_with": "C3 and A4, both retracted the same day. One wrong premise contaminated three claims.",
+     "evidence_file": "grounding/AUDIT-PC0001-RESULT.json"
+    }
+   },
+   {
+    "id": "C2",
+    "claim": "measured reduction on the 80-doc fixture, at the banding datasketch actually selects",
+    "evidence": "executed",
+    "measured": {
+     "naive_comparisons": 3160,
+     "candidates": 56,
+     "reduction_factor": 56.43,
+     "confirmed_pairs": 35,
+     "groups_found": "35/40",
+     "at": {
+      "requested_threshold": 0.7,
+      "num_perm": 128,
+      "bands": 14,
+      "rows": 9
+     }
+    },
+    "measured_on": {
+     "what": "the same 80-document synthetic fixture; reduction factor is fixture-specific and grows with N on any corpus",
+     "population": "pc0001-fixture-corpus",
+     "n": 80
+    },
+    "generalizes": "NO as a value, and the DIRECTION of the error matters. 32.6x is this 80-document fixture's reduction, and the factor GROWS with N: quoting it at large N understates the benefit, quoting it at small N invents one. This figure has been over-generalised in practice, which is why it carries this field at all. ORDER OF OPERATIONS, corrected after a consumer run -- do these in this order, because the first step can end the question: (1) Check the corpus-size entry in do_not_use_when. If N is below that breakpoint, STOP. A reduction factor cannot justify LSH at any magnitude on a corpus small enough to scan exhaustively, so computing the factor is wasted work and quoting one is worse than wasted. (2) ONLY if you clear that gate, compute the reduction for YOUR N from P(candidate) = 1 - (1 - s**rows)**bands at the bands and rows you actually intend to deploy, and weigh it against the cost of the exhaustive scan you would otherwise run -- not against this fixture's 32.6x.",
+    "grounding": "synthetic-fixture",
+    "correction_provenance": "The previous wording of this field inverted these two steps: it asked the reader to compute the reduction, then closed by noting that a large reduction on a small corpus is not a benefit -- which makes the computation it had just requested unable to change the decision. A naive consumer run (SC-02, opus-class, exposure=none) checked the cheap disqualifying gate, concluded the reduction was moot, and skipped the arithmetic. That was correct behaviour against a mis-ordered instruction, and it is the reason this field now states the order explicitly. Recorded because the defect class is reusable: an instruction whose own justification clause removes the need for the action it requests reads as thorough and executes as redundant.",
+    "CORRECTION": {
+     "previous": "candidates 97, reduction_factor 32.6, confirmed_pairs 38, groups_found 38/40",
+     "status": "FOUR OF FIVE VALUES CORRECTED -- all were measured at bands=16, rows=8",
+     "why": "(16,8) is a divisor pair of 128, selected under the retracted b*r == num_perm premise. datasketch selects (14,9) for threshold 0.70.",
+     "direction": "reduction_factor is HIGHER (56.43 vs 32.6) because (14,9) is more selective, and recall is LOWER (35/40 vs 38/40). The card was optimistic on recall and pessimistic on reduction.",
+     "only_survivor": "naive_comparisons = 3160 = C(80,2), which does not depend on the banding.",
+     "now_pinned_by": "tests/test_pc0001.py::test_blocking_actually_reduces_work, and the selection itself is cross-checked against real datasketch by test_selection_agrees_with_real_datasketch",
+     "evidence_file": "grounding/AUDIT-tests-certify-retracted-claim.json"
+    }
+   },
+   {
+    "id": "C3",
+    "claim": "the band/row split datasketch selects lands near but not exactly on the requested threshold -- typically within about 0.06 That means the achieved threshold sits near the requested one rather than on it, so a test must not assert equality.",
+    "evidence": "executed",
+    "grounding": "analytic",
+    "measured": {
+     "worst_gap_thresholds_0.50_to_0.95_at_num_perm_128": 0.062,
+     "example_num_perm_128": "0.80 -> b=9,r=13 (knee 0.844); 0.85 -> b=8,r=16 (0.878); 0.90 -> b=5,r=25 (0.938)",
+     "reachable_pairs": "645 at num_perm=128 and 1466 at num_perm=256 -- the space is DENSE"
+    },
+    "measured_on": {
+     "what": "local reimplementation of datasketch.lsh._optimal_param, which searches every (b,r) with b*r <= num_perm and minimises a weighted FP/FN integral. No corpus involved.",
+     "population": "exact-arithmetic"
+    },
+    "generalizes": "YES for the mechanism -- any caller gets a nearby rather than exact split. The MAGNITUDE (~0.06) was measured at num_perm=128 over thresholds 0.50-0.95 and should be recomputed for other num_perm rather than assumed. That means the offset is a property of the selected band/row split, which is why it has to be recomputed rather than carried across settings.",
+    "RETRACTION": {
+     "previous_claim": "reachable knees are quantized by the divisors of num_perm, giving only 8 knees at num_perm=128, with distinct requested thresholds collapsing to identical behaviour and errors up to 0.107.",
+     "status": "RETRACTED AS FALSE",
+     "retracted_on": "discovery that datasketch's _optimal_param constrains b*r <= num_perm, NOT b*r == num_perm",
+     "how_wrong": "the reachable space is 645 pairs at num_perm=128, not 8. 0.80/0.85/0.90 select three DIFFERENT pairs, not one. 0.60 and 0.70 select different pairs. There is no collapse and no no-op.",
+     "the_prior_caveat_was_the_tell": "the card previously stated that the nearest-knee model 'is not datasketch's selection objective' and then asserted quantization was 'unaffected'. The first half named the fatal objection; the second half waved it away. A caveat that identifies the flaw and dismisses it is worse than none, because it makes the claim look stress-tested.",
+     "how_it_was_caught": "a card-consuming model, asked to review a real threshold change, tested the card's claim against the actual config, reported the correct b/r pairs, and contradicted the card. Verified by local reimplementation.",
+     "removed_advice": "a suggested-num_perm table (120 at 0.60, 144 at 0.70, 180 at 0.80) claiming 15x/2.2x/39x error improvements. Under the real selector those switches make the gap WORSE at 0.60 (0.0617->0.0671) and at 0.80 (0.0445->0.0473), and give 1.3x not 2.2x at 0.70. It advised spending more memory for less accuracy and is deleted.",
+     "evidence_file": "grounding/PHASE-D2b-RESULT.json"
+    }
+   }
+  ],
+  "wall_clock": {
+   "evidence": "executed",
+   "note": "first draft claimed ~6 days at 1ns for N=1e6; wrong by 1000x, that is the 1us figure",
+   "N_1e6": {
+    "comparisons": 499999500000,
+    "at_1ns_seconds": 499.9995,
+    "at_1us_days": 5.787
+   },
+   "N_1e7": {
+    "comparisons": 49999995000000,
+    "at_1us_days": 578.7
+   },
+   "grounding": "synthetic-fixture"
+  },
+  "breakpoints": [
+   {
+    "below": 5000,
+    "action": "use the naive scan; simpler and fast enough",
+    "evidence": "reasoned",
+    "unit": "items (N), not comparisons",
+    "grounding": "analytic"
+   },
+   {
+    "above": 1000000,
+    "action": "distribute stage 1 by band bucket; stages 2-4 parallelise per bucket",
+    "evidence": "reasoned",
+    "unit": "items (N), not comparisons",
+    "grounding": "analytic"
+   }
+  ]
+ },
+ "anti_patterns": [
+  {
+   "id": "A1",
+   "name": "union-find over similar pairs (transitive chaining)",
+   "why": "single-linkage is transitive: A~B=0.9, B~C=0.9, A~C=0.2 yields one cluster That means a pair far below your threshold can still be merged through an intermediate, so single-linkage cannot be described as enforcing the threshold it was given.",
+   "fix": "representative_link",
+   "diagnostic": "max_intra_cluster_distance >> (1 - threshold)",
+   "evidence": "executed",
+   "grounding": "synthetic-fixture"
+  },
+  {
+   "id": "A2",
+   "name": "treating a band collision as a duplicate",
+   "why": "LSH is a recall device; skipping exact scoring imports its false-positive rate permanently",
+   "fix": "always run stage 2",
+   "evidence": "reasoned",
+   "grounding": "analytic"
+  },
+  {
+   "id": "A3",
+   "name": "keep the first",
+   "why": "makes output a function of input order",
+   "fix": "pick_medoid",
+   "evidence": "executed",
+   "grounding": "synthetic-fixture"
+  },
+  {
+   "id": "A4",
+   "name": "assuming the requested threshold is the effective one",
+   "why": "see C3 -- the selected split lands near, not on, the requested value, and nothing in the library reports what it chose",
+   "fix": "print lsh.b and lsh.r after construction and compute the actual knee (1/b)^(1/r); treat that as your real threshold. Do NOT change num_perm hoping to close the gap -- measure first, because it often does not help.",
+   "evidence": "executed",
+   "grounding": "analytic",
+   "RETRACTION": {
+    "previous_name": "tuning a threshold without checking it is expressible",
+    "previous_fleet_check": "CONFIRMED -- 0 of 11 real configs request an exactly reachable threshold; distinct requested thresholds collapse to identical behaviour, so a threshold ablation can compare a value against itself.",
+    "status": "the COLLAPSE half is RETRACTED AS FALSE. Distinct thresholds select distinct splits. A threshold ablation does NOT compare a value against itself.",
+    "what_survives": "the weaker true claim that the effective threshold differs from the requested one by roughly 0.06 at num_perm=128, and that the library does not report the split it chose. The verify-what-you-got advice stands; the change-num_perm advice does not.",
+    "note": "the arithmetic behind the retracted claim was executed, reproducible, and run on real harvested configs. All of that was true and none of it saved the finding, because it answered the wrong question. Reproducibility is not validity."
+   }
+  },
+  {
+   "id": "A5",
+   "name": "reporting only the count of duplicates removed",
+   "why": "high for both a good run and a chaining catastrophe",
+   "fix": "also report cluster count, max cluster size, max intra-cluster distance",
+   "evidence": "reasoned",
+   "grounding": "analytic"
+  }
+ ],
+ "do_not_use_when": [
+  "N < ~5000 (naive is simpler)",
+  "exact duplicates only (hashing is correct and cheaper)",
+  "a high-precision deterministic blocking key exists (Shape C)",
+  "similarity is vector-shaped with an existing ANN index (Shape B)",
+  "per-pair decisions must be auditable (LSH misses are probabilistic)"
+ ],
+ "escalation": [
+  {
+   "symptom": "recall too low at acceptable cost",
+   "action": "move the knee below threshold; let stage 2 reject extras"
+  },
+  {
+   "symptom": "candidate volume explodes",
+   "action": "raise the knee, or pre-block with Shape C before stage 1"
+  },
+  {
+   "symptom": "one giant cluster",
+   "action": "A1: switch to representative_link; check max_intra_cluster_distance"
+  },
+  {
+   "symptom": "threshold not expressible",
+   "action": "suggest_num_perm (C3)"
+  },
+  {
+   "symptom": "N > 1e6",
+   "action": "distribute stage 1 by band bucket"
+  },
+  {
+   "symptom": "recall must be provable not probabilistic",
+   "action": "leave this card; exact blocking + full within-block comparison"
+  }
+ ],
+ "cited_evidence": [
+  {
+   "path": "private:production-embedding-dedup-utility.py (source not shippable; paraphrased in the card)",
+   "symbol": "dedup-by-threshold entry point (renamed here)",
+   "findings": [
+    "greedy O(N*K) full-vector dot product per kept item",
+    "keep-first makes output a function of input order, not clustering",
+    "public wrapper accepts (embeddings, threshold, exclusion_list) and silently discards the exclusion list"
+   ],
+   "corroborates": "mechanism",
+   "corroborates_why": "Real production code exhibiting TWO of this card's anti-patterns unprompted: keep-first survivor selection (A3), and a greedy full-vector dot product per kept item, which is the naive scan the card is about. It confirms the failure MECHANISM occurs in code written without reference to this card. It says nothing about the card's recall or reduction magnitudes, which are fixture-measured.",
+   "evidence": "cited",
+   "grounding": "production-data",
+   "why_it_matters": "Real production code exhibiting TWO of this card's anti-patterns unprompted: keep-first survivor selection (A3), and a greedy full-vector dot product per kept item, which is the naive scan the card is about. It confirms the failure MECHANISM occurs in code written without reference to this card. It says nothing about the card's recall or reduction magnitudes, which are fixture-measured.",
+   "honest_limit": "One file, and I did not measure how common either pattern is. It also had no `evidence` or `grounding` field until this audit, which made it INVISIBLE to the grounding walk -- so the portfolio's '0 ungrounded claims' figure was computed over a population that excluded it. 1 of 71 evidence-bearing nodes was in that blind spot."
+  }
+ ],
+ "tests": {
+  "command": "python3 -m unittest discover -s tests -t .",
+  "count": 34
+ },
+ "related_cards": [
+  {
+   "id": "PC-0002",
+   "relation": "composes_with",
+   "topic": "embedding generation",
+   "status": "written",
+   "why": "Written. PC-0002 produces the vectors PC-0001 Shape B consumes. The seam is a metric-semantics change neither card owns alone: this card's measured recall 0.6133 is MinHash/Jaccard over shingles, and cosine over embeddings is a different notion of similar -- the 0.7 threshold does not carry across."
+  }
+ ]
+}

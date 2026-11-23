@@ -1,0 +1,16 @@
+[project]
+name = "decision-cards"
+version = "1.0.0"
+description = "Five evidence-graded engineering decision cards with stdlib reference implementations, an authoring schema, and the depth gate that enforces it"
+readme = "README.md"
+requires-python = ">=3.11"
+# Deliberately no dependencies: every [executed] claim must be reproducible
+# with the standard library alone, so there is nothing to pin or break.
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "ruff>=0.6"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100

@@ -1,0 +1,533 @@
+{
+ "id": "PC-0003",
+ "title": "Idempotency under retries",
+ "one_line": "A retried operation must not apply twice, and the shape that guarantees it is chosen by the effect algebra -- not by the transport, the retry rate, or the queue's delivery guarantee.",
+ "domains": [
+  "distributed-systems",
+  "api-design",
+  "data-integrity",
+  "queue-consumers"
+ ],
+ "recognition_signals": [
+  "the caller retries on timeout, and a timeout cannot distinguish 'never arrived' from 'applied, reply lost'",
+  "the transport is at-least-once: SQS, Kafka, a webhook sender, a pipeline replay, or any client with a retry policy",
+  "totals, balances, counts or row-counts drift upward after an incident and nobody can say by how much",
+  "the same operation appears twice in an audit log with different request ids",
+  "a consumer asks 'is this safe to replay?' and the answer is a discussion rather than a property",
+  "an at-least-once queue is being treated as exactly-once because the documentation used that phrase"
+ ],
+ "do_not_use_when": [
+  "the effect is a pure read with no side effect -- there is nothing to deduplicate and a dedupe store is pure cost",
+  "the operation is already an assignment (state[k] = v) and the ONLY concern is duplicate application: measured, a naive handler applied 667 duplicates and left 0 of 1334 rows wrong",
+  "you need ordering or exactly-once *delivery* rather than exactly-once *effect* -- that is a different problem and this card will mislead you",
+  "the retry window is unbounded and no TTL can be sized: a dedupe key space that never expires is a separate capacity problem this card does not solve",
+  "concurrency on one row is the actual problem rather than replay of one operation -- reach for isolation levels, not idempotency keys"
+ ],
+ "selection_rule": {
+  "text": "Ask what the effect DOES before asking how it arrives. (1) If the effect is expressible as an assignment, use Shape A: it needs no key, no store and no TTL, and measured 0 rows wrong under 667 duplicate applications. (2) Otherwise, if the client can supply a stable token, use Shape B -- a reservation carrying a request hash and a committed flag, which measured 0 lost and 0 duplicated even with a crash injected into every retried operation. (3) If no client token is available but the row carries a version, use Shape C: 0 extra durable rows, at the cost of 667 conflicts that cannot be distinguished from another writer's. (4) Shape D only if payloads are high-entropy AND legitimate duplicates are impossible -- both conditions, because it measured a 24.20% loss rate at a 25% legitimate-duplicate rate.",
+  "evidence": "executed",
+  "grounding": "simulator"
+ },
+ "solution_shapes": [
+  {
+   "id": "A",
+   "name": "Natural idempotency: express the effect as an assignment",
+   "implemented": true,
+   "when": "the operation can be written state[key] = value rather than state[key] += value",
+   "cost": "zero extra durable state, no TTL, no key negotiation with the client",
+   "measured": "667 duplicate applications, 0 of 1334 rows wrong, 0 dedupe writes",
+   "measured_on": {
+    "what": "naive handler, ASSIGN algebra",
+    "population": "simulated at-least-once delivery stream",
+    "n": 4000
+   },
+   "limit": "unavailable when the effect is an increment, an append, or any operation whose result depends on the prior value. Forcing it anyway is anti-pattern A5.",
+   "evidence": "executed",
+   "grounding": "simulator",
+   "generalizes": "SPLIT, and the split matters because one half is load-bearing. The ZERO transfers exactly: under an ASSIGN (last-write-wins) algebra, duplicate application is harmless, so row damage is 0 BY CONSTRUCTION and your figure is also exactly 0 -- not approximately 0, and not '0 on this fixture'. That is a property of the algebra, and it is the reason the selection rule asks about the effect before anything about transport or retries. Read it the same way as PC-0004's A4 and S4, where the 1000-of-1000 and 0-of-1000 results transfer precisely because they are structural rather than sampled. What does NOT transfer is the SCALE: 667 duplicate applications on a 4000-event stream is a function of the injected retry rate, so do not read 667 as a duplicate volume to expect, and do not read 1334 as anything but this fixture's row count."
+  },
+  {
+   "id": "B",
+   "name": "Reservation with a request hash and a committed flag",
+   "implemented": true,
+   "when": "the effect is not an assignment and the client can supply a stable idempotency token",
+   "cost": "2 durable writes per operation (reserve, then commit); a TTL that must be sized; one extra read on the replay path",
+   "measured": "0 lost, 0 duplicated, 0 rows wrong with a crash injected into all 573 retried operations; the only shape that also rejected a reused token carrying a different request",
+   "measured_on": {
+    "what": "crash injected on the first delivery of every retried operation",
+    "population": "simulated at-least-once delivery stream",
+    "n": 4000
+   },
+   "limit": "requires the client to generate and reuse a token. A server-side key cannot substitute: only the caller knows whether it meant one operation or two.",
+   "evidence": "executed",
+   "grounding": "simulator"
+  },
+  {
+   "id": "C",
+   "name": "Conditional write (compare-and-set) on the row version",
+   "implemented": true,
+   "when": "no client token is available, the target row carries a version, and an ambiguous rejection is acceptable to the caller",
+   "cost": "0 extra durable rows and nothing to expire, but the client must read the version first, and every rejection is ambiguous",
+   "measured": "667 conflicts (exactly equal to the 667 duplicate deliveries), 0 duplicate applications, 0 lost, 0 dedupe writes, 0 rows wrong",
+   "measured_on": {
+    "what": "conditional_write handler, INCREMENT algebra",
+    "population": "simulated at-least-once delivery stream",
+    "n": 4000
+   },
+   "limit": "a losing CAS cannot distinguish 'my own earlier attempt already applied this' from 'a different writer got there first'. All 667 rejections carry that ambiguity.",
+   "evidence": "executed",
+   "grounding": "simulator"
+  },
+  {
+   "id": "D",
+   "name": "Content hash scoped to the target row",
+   "implemented": true,
+   "when": "no client token, no row version, payloads are high-entropy, AND two legitimately identical operations are impossible",
+   "cost": "1 durable row per distinct payload, plus a TTL",
+   "measured": "scoping cut the false-merge rate from 0.7545 to 0.0003 at 1000 distinct payload values, but left 0.0570 at a 25% legitimate-duplicate rate -- that means scoping removes the collision cause and never the duplicate-traffic cause, so it must not be presented as a complete fix.",
+   "measured_on": {
+    "what": "unscoped vs row-scoped content hash, varying entropy and legitimate-duplicate rate",
+    "population": "simulated stream with payload entropy varied",
+    "n": 4000
+   },
+   "limit": "no function of the request content can separate a retry from a legitimate repeat, because they differ in neither row nor bytes. This shape is a fallback, not a default.",
+   "evidence": "executed",
+   "grounding": "simulator",
+   "generalizes": "DIRECTION and mechanism, not the rates. Row-scoping a content hash removes cross-row birthday collisions, which is why 0.7545 falls to 0.0003. The RESIDUAL 0.0570 is a function of your legitimate-duplicate rate -- at zero legitimate duplicates row-scoping is very nearly exact, and it degrades as that rate rises. Both figures are functions of the two axes swept here (payload entropy, legitimate-duplicate rate); neither is a constant of nature."
+  }
+ ],
+ "rejected": [
+  {
+   "id": "R1",
+   "name": "Rely on the transport's exactly-once delivery guarantee",
+   "why": "the guarantee is about delivery into the consumer, not about application of your side effect. A consumer that reads once and then crashes before committing still needs the effect to be replay-safe, so the guarantee moves the problem rather than solving it.",
+   "evidence": "reasoned"
+  },
+  {
+   "id": "R2",
+   "name": "Hold a per-row lock for the duration of the operation",
+   "why": "serialises unrelated operations on the same row and converts a correctness problem into an availability one. It also does not survive the crash case at all: a lock lost on process death leaves no record of whether the effect applied.",
+   "evidence": "reasoned"
+  },
+  {
+   "id": "R3",
+   "name": "Never expire dedupe keys",
+   "why": "removes the TTL sizing problem by making the key space grow without bound, which is a capacity problem with no natural ceiling. Real internal code chooses a long TTL (7 days) rather than none, which is the honest tradeoff.",
+   "evidence": "cited"
+  }
+ ],
+ "cost_model": {
+  "constraints": [
+   {
+    "id": "C1",
+    "claim": "duplicate deliveries are a property of the retry policy and are common, not exceptional",
+    "measured": {
+     "deliveries": 4667,
+     "logical_operations": 4000,
+     "duplicate_deliveries": 667,
+     "duplicate_ratio": 0.1668,
+     "operations_retried_at_least_once": 573,
+     "retried_fraction": 0.1432,
+     "attempts_histogram": {
+      "1": 3427,
+      "2": 488,
+      "3": 76,
+      "4": 9
+     }
+    },
+    "measured_on": {
+     "what": "p_ack_lost=0.15, max_attempts=4, seed=20260906",
+     "population": "simulated at-least-once delivery stream",
+     "n": 4000
+    },
+    "evidence": "executed",
+    "grounding": "simulator",
+    "generalizes": "NO as a value, YES as a shape, and the value is computable rather than transferable. 0.1668 follows from p_ack_lost=0.15 and max_attempts=4, both chosen. The transferable claim is that duplicate delivery is ORDINARY rather than exceptional -- a sixth of deliveries here -- and that its rate is a property of your retry policy, not of your bad luck. Derive your own figure from your policy instead of quoting this one."
+   },
+   {
+    "id": "C2",
+    "claim": "the effect algebra decides whether duplicates matter at all -- the SAME stream and the SAME handler are correct under assignment and corrupting under increment",
+    "measured": {
+     "naive_increment_rows_wrong": 501,
+     "naive_assign_rows_wrong": 0,
+     "duplicate_applications_both": 667,
+     "total_rows": 1334
+    },
+    "measured_on": {
+     "what": "naive handler under both algebras",
+     "population": "simulated at-least-once delivery stream",
+     "n": 4000
+    },
+    "evidence": "executed",
+    "grounding": "simulator",
+    "generalizes": "The counts are fixture-specific; the ALGEBRA generalises completely and is the point. 501 wrong rows is an artifact of this stream. That increment is not idempotent and assignment is, is arithmetic -- it holds for every stream, every language and every store. This is the constraint to carry: identify your effect's algebra before reaching for any dedupe machinery, because under assignment you may need none."
+   },
+   {
+    "id": "C3",
+    "claim": "a crash between the dedupe write and the effect is wrong in one of two opposite directions unless the reservation is resumable; atomicity is sufficient but NOT necessary",
+    "measured": {
+     "key_then_effect_lost": 573,
+     "key_then_effect_rows_wrong": 501,
+     "effect_then_key_duplicated": 573,
+     "effect_then_key_rows_wrong": 501,
+     "reserve_then_commit_lost": 0,
+     "reserve_then_commit_duplicated": 0,
+     "atomic_lost": 0,
+     "atomic_duplicated": 0
+    },
+    "measured_on": {
+     "what": "crash injected on the first delivery of every retried operation; counts are exact, not sampled",
+     "population": "simulated at-least-once delivery stream",
+     "n": 4000
+    },
+    "evidence": "executed",
+    "grounding": "simulator",
+    "generalizes": "The counts are fixture-specific; the STRUCTURE generalises completely. That key-then-effect loses work and effect-then-key duplicates it -- opposite failures from the same crash window -- is a property of the ordering, not of this simulation. So is the conclusion that atomicity is SUFFICIENT but not NECESSARY: a resumable reservation fixes both orderings without a transaction, which is what makes this implementable across a service boundary where no shared transaction exists."
+   },
+   {
+    "id": "C4",
+    "claim": "the TTL must exceed the TOTAL retry window, not the retry interval, and the failure is a staircase rather than a gradual decay",
+    "measured": {
+     "ttl_le_20_re_exec_rate": 1.0,
+     "ttl_21_to_40_re_exec_rate": 0.1274,
+     "ttl_41_to_60_re_exec_rate": 0.0135,
+     "ttl_ge_61_re_exec_rate": 0.0,
+     "retry_gap_ticks": 20,
+     "max_attempts": 4,
+     "total_retry_window_ticks": 60
+    },
+    "measured_on": {
+     "what": "key_dedupe with retry_gap=20 ticks, TTL swept over 1..100",
+     "population": "simulated at-least-once delivery stream",
+     "n": 4000
+    },
+    "evidence": "executed",
+    "grounding": "simulator",
+    "generalizes": "The rates are fixture-specific; the RULE and its shape generalise. The staircase, not gradual decay, follows from retries being discrete: a TTL either outlives the whole retry window or it does not. The rule -- TTL must exceed the TOTAL retry window, retry_gap * max_attempts, not the interval -- is arithmetic over your own policy. Compute it; do not carry 61 ticks, which means nothing outside this clock."
+   },
+   {
+    "id": "C5",
+    "claim": "a content-derived dedupe key merges operations it should not, and the rate is driven by payload entropy and by the legitimate-duplicate rate -- two independent causes that an unscoped key conflates",
+    "measured": {
+     "unscoped_loss_entropy_1e3_no_legit_dupes": 0.7545,
+     "scoped_loss_entropy_1e3_no_legit_dupes": 0.0003,
+     "unscoped_loss_entropy_1e9_legit_25pct": 0.242,
+     "scoped_loss_entropy_1e9_legit_25pct": 0.057,
+     "unscoped_loss_entropy_1e9_no_legit_dupes": 0.0
+    },
+    "measured_on": {
+     "what": "payload amount space in {1000, 1e9} x legitimate-duplicate rate in {0.00, 0.05, 0.25}",
+     "population": "simulated stream with payload entropy varied",
+     "n": 4000
+    },
+    "evidence": "executed",
+    "grounding": "simulator",
+    "generalizes": "NO, and this one is the least transferable in the card. The loss rates are driven by payload entropy and by your legitimate-duplicate rate, both properties of YOUR traffic that this fixture merely varies. 0.7545 describes a 1,000-value amount space with no legitimate duplicates. What transfers is that these are TWO INDEPENDENT causes of the same symptom, so an unscoped content-derived key conflates them and no single measurement can separate them afterwards."
+   },
+   {
+    "id": "C6",
+    "claim": "the shapes differ by a whole class of durable state, and under an assignment workload a dedupe store buys nothing at all",
+    "measured": {
+     "key_dedupe_durable_writes": 4000,
+     "key_dedupe_extra_rows": 4000,
+     "conditional_write_durable_writes": 0,
+     "natural_idempotent_durable_writes": 0,
+     "naive_assign_rows_wrong": 0
+    },
+    "measured_on": {
+     "what": "dedupe writes and extra rows per shape, ASSIGN algebra",
+     "population": "simulated at-least-once delivery stream",
+     "n": 4000
+    },
+    "evidence": "executed",
+    "grounding": "simulator",
+    "generalizes": "YES as a scaling law, and the absolute numbers are trivial rather than measured. 4,000 durable writes is one per operation -- key_dedupe writes a row per operation BY CONSTRUCTION, so the claim is O(operations) of extra durable state against zero for the conditional-write and naturally-idempotent shapes. That ratio holds everywhere. Under an ASSIGN algebra the zero is exact: a dedupe store buys literally nothing, which is the card's strongest cost argument."
+   },
+   {
+    "id": "C7",
+    "claim": "a reused token carrying a DIFFERENT request is answered with the first request's response and the second operation is silently dropped, unless the reservation stamps a request hash",
+    "measured": {
+     "key_dedupe_reuse_detected": false,
+     "key_dedupe_second_response_body_amount": 100,
+     "key_dedupe_second_request_amount": 250,
+     "key_dedupe_applied_total": 100,
+     "reserve_then_commit_reuse_detected": true
+    },
+    "measured_on": {
+     "what": "two deliveries sharing one token with different payloads",
+     "population": "hand-constructed reused-token pair",
+     "n": 2
+    },
+    "evidence": "executed",
+    "grounding": "simulator",
+    "generalizes": "Not a measurement at all -- a hand-constructed counterexample, n=2, and it should be read as an existence proof rather than a rate. It shows the failure is REACHABLE and SILENT: a reused token carrying a different request is answered with the first request's response and the second operation disappears with no error anywhere. The existence generalises to every dedupe store that keys on a token without stamping a request hash. This card offers no estimate of how often it happens in production, and anyone quoting a frequency from n=2 is inventing one."
+   }
+  ],
+  "breakpoints": [
+   {
+    "at": 61,
+    "unit": "ticks of TTL",
+    "what": "below (max_attempts-1) x retry_gap + 1 = 61, late retries find an expired key and re-execute; at TTL<=20 every duplicate re-executes"
+   },
+   {
+    "at": 0,
+    "unit": "fraction of operations that are legitimate duplicates",
+    "what": "above zero, a content-derived key (Shape D) starts losing real operations: 0.0570 loss at 0.25 even when scoped to the row"
+   },
+   {
+    "at": 1,
+    "unit": "durable rows per operation",
+    "what": "the cost Shape B and Shape D add and Shapes A and C do not; 4000 rows for 4000 operations"
+   },
+   {
+    "at": 667,
+    "unit": "ambiguous rejections per 4000 operations",
+    "what": "Shape C's conflict count equals the duplicate-delivery count exactly, and none of them can be attributed to their cause"
+   }
+  ]
+ },
+ "decomposition": {
+  "nodes": [
+   {
+    "n": 1,
+    "name": "Determine the effect algebra",
+    "output": "assignment or non-assignment"
+   },
+   {
+    "n": 2,
+    "name": "Determine whether the client can supply a stable token",
+    "output": "yes or no"
+   },
+   {
+    "n": 3,
+    "name": "Choose the shape",
+    "output": "A, B, C or D"
+   },
+   {
+    "n": 4,
+    "name": "Make the dedupe record resumable",
+    "output": "reservation carrying committed + request_hash, or one atomic transaction"
+   },
+   {
+    "n": 5,
+    "name": "Size the TTL from the total retry window",
+    "output": "TTL > (max_attempts-1) x retry_interval"
+   },
+   {
+    "n": 6,
+    "name": "Store the response, not just the key",
+    "output": "replays return the original body"
+   },
+   {
+    "n": 7,
+    "name": "Monitor for the silent failures",
+    "output": "alarms on lost operations and on reused tokens"
+   }
+  ],
+  "edges": [
+   {
+    "from": 1,
+    "to": 3,
+    "why": "an assignment effect selects Shape A and makes every other shape pure cost -- measured 0 rows wrong with 667 duplicate applications"
+   },
+   {
+    "from": 2,
+    "to": 3,
+    "why": "without a client token, Shape B is unavailable and the choice collapses to C or D"
+   },
+   {
+    "from": 3,
+    "to": 4,
+    "why": "Shapes B and D own a dedupe record, and a non-resumable record is wrong in one of two directions (573 lost or 573 duplicated)"
+   },
+   {
+    "from": 3,
+    "to": 5,
+    "why": "only the shapes with a dedupe record have a TTL to size; A and C have nothing to expire"
+   },
+   {
+    "from": 4,
+    "to": 6,
+    "why": "the reservation is where the response has to live; storing the key without it leaves 100% of replays unable to proceed"
+   },
+   {
+    "from": 5,
+    "to": 7,
+    "why": "an undersized TTL fails silently and only for slow retries, so it is invisible without an alarm on re-execution"
+   },
+   {
+    "from": 6,
+    "to": 7,
+    "why": "a replay that returns no body leaves business state CORRECT, so only client-side monitoring can see it"
+   }
+  ]
+ },
+ "anti_patterns": [
+  {
+   "id": "A1",
+   "name": "A dedupe write that is neither atomic with the effect nor resumable",
+   "symptom": "after a crash, totals are either short or inflated, and which one depends on an ordering nobody documented",
+   "measured": "573 operations lost (key-first) or 573 applied twice (effect-first); 501 of 1334 rows wrong in BOTH cases",
+   "measured_on": {
+    "what": "crash injected on the first delivery of every retried operation",
+    "population": "simulated at-least-once delivery stream",
+    "n": 4000
+   },
+   "fix": "make the reservation resumable (Shape B) or make the two writes one transaction",
+   "evidence": "executed",
+   "grounding": "simulator",
+   "generalizes": "The SYMMETRY generalizes completely and is the whole finding: a non-atomic key-write and effect-write has NO correct single-step order. Key-first loses operations, effect-first applies them twice, and the row damage is identical at 501 either way. That conclusion is structural. The 573 and 501 counts scale with the crash-injection rate and transfer nothing."
+  },
+  {
+   "id": "A2",
+   "name": "Deriving the dedupe key from the payload",
+   "symptom": "deduplication appears to work, and a fraction of real operations silently never happen",
+   "measured": "0.7545 of operations lost at 1000 distinct payload values with ZERO legitimate duplicates -- pure birthday collision; 0.2420 lost at high entropy with a 25% legitimate-duplicate rate -- that means two distinct causes are in play with different remedies, which is why one mitigation does not close both.",
+   "measured_on": {
+    "what": "unscoped content hash across entropy and legitimate-duplicate rates",
+    "population": "simulated stream with payload entropy varied",
+    "n": 4000
+   },
+   "fix": "take the key from the client; at minimum scope the hash to the target row, which cut the first cause to 0.0003 -- that means row-scoping addresses the collision cause only, so do not expect it to help when the duplicates are legitimate.",
+   "evidence": "executed",
+   "grounding": "simulator",
+   "generalizes": "The MECHANISM is exact arithmetic; the rates are not transferable. Birthday-collision probability follows from YOUR number of distinct payload values and YOUR volume -- compute it, do not quote 0.7545. Note what that figure actually shows: 0.7545 of operations lost with ZERO legitimate duplicates present, so the loss is pure collision and not a consequence of real repeats. The 0.2420 figure is a different regime (high entropy, 25% legitimate duplicates) and the two must never be averaged."
+  },
+  {
+   "id": "A3",
+   "name": "Storing the key but not the response",
+   "symptom": "clients report that a retry returned no receipt, while dashboards show the write succeeded",
+   "measured": "667 of 667 replays returned no body (1.0000), while rows_wrong stayed 0 -- the business state is CORRECT, so no data-quality alarm can detect it",
+   "measured_on": {
+    "what": "key_dedupe with cache_response=False",
+    "population": "simulated at-least-once delivery stream",
+    "n": 4000
+   },
+   "fix": "store the response body in the same record as the key, and return it on replay",
+   "evidence": "executed",
+   "grounding": "simulator",
+   "generalizes": "GENERALIZES COMPLETELY, and it is structural rather than statistical. If you do not cache the response, then every replay returns no body -- 667 of 667 is 1.0000 by construction, not by measurement, and your rate will also be 1.0. The second half generalizes too and matters more: because the business state stays correct, no data-quality alarm can detect this. It is invisible to exactly the monitoring most teams already have."
+  },
+  {
+   "id": "A4",
+   "name": "Sizing the TTL to the retry interval instead of the total retry window",
+   "symptom": "duplicates reappear only for the slowest retries, so the bug looks intermittent and load-related",
+   "measured": "0.1274 of duplicates re-executed at TTL in 21..40 and 0.0135 at 41..60, with a retry interval of only 20 ticks; zero only above 60 -- that means the TTL must exceed your retry horizon rather than merely cover the common case, so never set it from an average.",
+   "measured_on": {
+    "what": "TTL swept 1..100 against retry_gap=20, max_attempts=4",
+    "population": "simulated at-least-once delivery stream",
+    "n": 4000
+   },
+   "fix": "TTL > (max_attempts - 1) x retry_interval, then add margin for clock skew",
+   "evidence": "executed",
+   "grounding": "simulator",
+   "SCOPED_by_fleet_grounding": "INVERTED for managed platforms. This card says size the dedupe TTL to exceed your total retry window. On a managed platform you CANNOT -- the dedupe window is a fixed constant the platform chooses, and published windows span more than two orders of magnitude between services. The caller must instead size the RETRY WINDOW to fit INSIDE the platform's window. Same constraint, opposite lever, and this card states only one direction. Figures in the held grounding record."
+  },
+  {
+   "id": "A5",
+   "name": "Retrofitting assignment semantics onto an increment effect to get idempotency for free",
+   "symptom": "no error, no duplicate, and every total that had more than one operation is quietly wrong",
+   "measured": "1333 of 1334 rows wrong -- 2.66x more damage than the 501 rows the naive handler corrupts, so the 'fix' is worse than doing nothing",
+   "measured_on": {
+    "what": "natural_idempotent handler forced onto the INCREMENT algebra",
+    "population": "simulated at-least-once delivery stream",
+    "n": 4000
+   },
+   "fix": "if the effect is not an assignment, Shape A is unavailable; use Shape B or C",
+   "evidence": "executed",
+   "grounding": "simulator",
+   "generalizes": "SPLIT, and my earlier wording had this backwards -- corrected by measurement, not by argument. (1) The COUNT is STRUCTURAL, not rate-dependent. Re-running the fixture at p_ack_lost=0.00, with ZERO duplicate deliveries, still corrupts 667 of 667 rows (100%), while the naive handler on the same stream corrupts NONE. The reason is that the handler assigns where it must accumulate, so any row receiving two or more legitimate operations ends up holding the last amount instead of the sum. Every row with >=2 operations is wrong; every row with exactly 1 is right. Compute YOUR exposure from the fraction of rows that receive more than one operation -- NOT from your retry rate, which does not enter into it. (2) The 2.66x RATIO is rate-dependent and UNBOUNDED: the denominator is the naive handler's damage, which falls to zero as retries vanish, so the ratio diverges. Quoting '2.66x' implies a bounded multiple and understates the anti-pattern. (3) Therefore read this anti-pattern as a CORRECTNESS bug rather than a retry hazard: forcing natural-idempotence onto a non-idempotent algebra corrupts multi-operation rows on a perfectly reliable network, with no duplicate delivery anywhere. That is a stronger and more general claim than the card's original retry-framed comparison.",
+   "correction_provenance": "My first `generalizes` for A5 said the count was 'a function of the retry and crash rates in this stream'. That was wrong. It was overturned during a consolidation audit prompted by a different defect (Shape A, where I had called a structural zero uninformative). Reproduce with delivery_stream(2000, seed=11, p_ack_lost=0.0, max_attempts=4, amount_space=1000) against handlers.natural_idempotent under INCREMENT. Recorded because the correction runs opposite to the usual direction: the conditioning I added was too WEAK, and it hid a stronger claim rather than overstating a weaker one. That means the conditioning I added was too weak, which is why the correction strengthened the claim instead of retracting it."
+  },
+  {
+   "id": "A6",
+   "name": "Adding a dedupe store to a workload that is already idempotent",
+   "symptom": "a dedupe table as large as the operation table, defended as a safety measure",
+   "measured": "4000 durable writes and 4000 extra rows for 4000 operations, against a naive handler that was already 0 rows wrong under the same 667 duplicate applications",
+   "measured_on": {
+    "what": "key_dedupe vs naive under the ASSIGN algebra",
+    "population": "simulated at-least-once delivery stream",
+    "n": 4000
+   },
+   "fix": "check the effect algebra first; under assignment the correct answer is to add nothing",
+   "evidence": "executed",
+   "grounding": "simulator"
+  },
+  {
+   "id": "A7",
+   "name": "Accepting a reused token without comparing the request",
+   "symptom": "a client reuses a token by mistake and receives a stale success for an operation that never ran",
+   "measured": "the second request ($250) was answered with the first request's body ($100) and never applied; applied total 100; reuse_detected false. The reservation shape rejected it.",
+   "measured_on": {
+    "what": "two deliveries sharing one token with different payloads",
+    "population": "hand-constructed reused-token pair",
+    "n": 2
+   },
+   "fix": "stamp a request hash on the reservation and reject a mismatch, as real internal code does",
+   "evidence": "executed",
+   "grounding": "simulator",
+   "SCOPED_by_fleet_grounding": "Scoped to HAND-ROLLED dedupe stores. Managed idempotency-token APIs across a number of documented AWS services do NOT drop silently -- they raise a NAMED error on a token reused with a different request, so the platform already enforces the comparison this anti-pattern asks you to add. The silent drop is a property of hand-written dedupe code, not of token reuse as such. Internal code shows both patterns present. Figures and service list in the held grounding record."
+  }
+ ],
+ "escalation": [
+  {
+   "symptom": "totals drifted upward after an incident and the size of the drift is unknown",
+   "action": "check whether the dedupe write is resumable; a non-atomic effect-first ordering duplicates exactly the retried operations, which is a recoverable, countable set"
+  },
+  {
+   "symptom": "operations are missing rather than duplicated",
+   "action": "suspect a key-first non-resumable ordering, or a content-derived key merging distinct operations; both lose work silently and neither raises"
+  },
+  {
+   "symptom": "clients report retries returning success with no body",
+   "action": "the response is not stored beside the key; business state is fine and no data alarm will fire, so fix the record shape rather than hunting the data"
+  },
+  {
+   "symptom": "duplicates appear only under load or only for a few operations",
+   "action": "compare the TTL against (max_attempts - 1) x retry_interval, not against the retry interval"
+  },
+  {
+   "symptom": "a rejection cannot be explained to the caller",
+   "action": "if the shape is a conditional write, that ambiguity is inherent: 667 of 667 conflicts were indistinguishable from another writer. Move to a reservation if the caller needs to know."
+  },
+  {
+   "symptom": "nobody can say whether the effect is an assignment or an increment",
+   "action": "stop. That question decides the entire design and every shape below it; answering it wrong costs more than doing nothing at all."
+  }
+ ],
+ "related_cards": [
+  {
+   "id": "PC-0001",
+   "relation": "composes_with",
+   "why": "near-duplicate detection asks whether two ITEMS are the same thing; this card asks whether two REQUESTS are the same operation. The second is decidable from a client token and the first is not, which is why one is a similarity problem and the other is a bookkeeping problem."
+  },
+  {
+   "id": "PC-0002",
+   "relation": "composes_with",
+   "why": "an embedding pipeline that retries a batch needs the cache key to be an identity, which is this card's C7 in a different domain: PC-0002 measured 100% staleness when the key omitted any of 7 identity fields."
+  }
+ ],
+ "cited_evidence": [
+  {
+   "path": "private:production-prompt-service/idempotency-reservation-dao.java (source not shippable)",
+   "what": "A real reservation-based idempotency store. `tryReserve` does a conditional put (attribute_not_exists) stamping a requestHash 'so a replay can detect a reused token carrying a different request'; `releaseIfOwnedBy` deletes the reservation only if it is still owned by the same resource; TTL = Duration.ofDays(7).",
+   "why_it_matters": "This code changed the card's recommendation. The simulator's first framing was that the two writes must be ATOMIC, because both orderings measured wrong. Reading real code showed the reservation can instead carry enough state to be RESUMED, which is a weaker and more achievable requirement -- and it supplied the request-hash defence (C7, A7) that the simulator had not modelled at all.",
+   "honest_limit": "It is a DynamoDB-backed single-table reservation. Its 7-day TTL is not transferable: the correct TTL is a function of the caller's retry policy, which this card measures rather than borrows.",
+   "evidence": "cited",
+   "corroborates": "mechanism",
+   "corroborates_why": "The strongest form of mechanism corroboration: this code CHANGED the card's recommendation. The simulator's first framing was that the key-write and the effect-write must be ATOMIC, because both orderings measured wrong. Real code showed a reservation can instead carry enough state to resume, which is implementable across a service boundary where a shared transaction is not. It corroborates the mechanism, not the 4000-event rates."
+  }
+ ],
+ "tests": {
+  "count": 36
+ },
+ "authoring": {
+  "measure_first": true,
+  "note": "Every number above was read from `python3 -m impl.measure` output before the prose was written. Three measurements were discarded as simulator artifacts rather than published: a 75% content-hash loss rate that was a birthday collision from a 999-value payload space, a CAS handler that compared an attempt counter against a shared row version and reported 2355 false losses, and a boolean CORRECT/WRONG verdict that could not distinguish over-counting from computing a different function."
+ },
+ "fleet_grounding_L2": {
+  "source": "grounding/PC0003-RESULT-HELD.json",
+  "released_after": "the sealed domain-prior experiment completed at this hash",
+  "note": "Two corrections applied as zero-digit SCOPED fields on A7 and A4 so the cost-model digit budget is unchanged. Neither arm of the domain-prior run mentioned the managed-platform inversion, which is independent evidence it is a genuine gap and not a pedantic one."
+ }
+}

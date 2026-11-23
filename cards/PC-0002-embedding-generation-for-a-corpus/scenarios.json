@@ -1,0 +1,202 @@
+{
+  "_comment": "Consumer scenarios for PC-0002. Statically gated: every rubric expectation must resolve to a real element of card.json. NOT YET RUN -- this card has zero recorded consumer runs, which the depth gate reports as runs-recorded=0. That is deliberate rather than pending: the author cannot produce a naive baseline (any delegate inherits the authoring conversation, which contains the expected answers), so these rubrics are written to be executed by someone else. Use run_scenarios.py --prepare to lock the card.json hash before running.",
+  "provenance": {
+    "authored_by": "card author -- so these scenarios ARE contaminated as a test of the author's own reasoning, and are only useful when run by an external consumer",
+    "consumer_input": "card.json ONLY -- no CARD.md, no impl/, no tests/, no scenarios.json",
+    "how_to_run": "python3 run_scenarios.py --prepare SC-01-planning-4m-support-tickets"
+  },
+  "scenarios": [
+    {
+      "id": "SC-01-planning-4m-support-tickets",
+      "kind": "planning",
+      "prompt": "We need embeddings for 4 million support tickets. Median length is about 180 tokens but a long tail runs past 3,000. An engineer has proposed: embed each ticket with max_length=512 and truncation=True; mean-pool the last hidden state; run batches of 512 in the order the rows come out of the database; cache each vector under a hash of the ticket text; retrieve with dot product. Produce a plan.",
+      "seeded_traps": [
+        {
+          "trap": "truncation with no measurement of what left",
+          "detected_via": "A1 + C1 -- tokens_lost exceeds docs_over at every window"
+        },
+        {
+          "trap": "mean-pool with no attention mask",
+          "detected_via": "A2 -- but only conditionally harmful, which is the point"
+        },
+        {
+          "trap": "dot product on unnormalised vectors",
+          "detected_via": "A4 + C5"
+        },
+        {
+          "trap": "THE PAIR: unmasked pooling AND unnormalised dot together",
+          "detected_via": "decomposition edge 2 conflicts-with 5 -- neither is fatal alone; together a 1/16-full row is down-weighted 16x"
+        },
+        {
+          "trap": "batch 512 in arrival order",
+          "detected_via": "A5 + C3 -- and 512 is PAST the measured bucketing peak at 128, so the proposed batch size is doubly wrong"
+        },
+        {
+          "trap": "cache keyed on text hash",
+          "detected_via": "A3 + C6 -- 100% stale-serve rate on the next model bump"
+        },
+        {
+          "trap": "p99 is well past the window, so Shape B is genuinely unavailable",
+          "detected_via": "selection_rule -- must be checked and RULED OUT, not skipped"
+        }
+      ],
+      "rubric": {
+        "must_identify_from": "connect the proposal to >=1 recognition_signal as a PREDICTED symptom -- this is a proposal review, nothing has shipped, so there are no symptoms to recognise yet",
+        "must_quantify_naive_cost_from": "cost_model.naive_cost",
+        "must_flag_anti_patterns": [
+          "A1",
+          "A2",
+          "A3",
+          "A4",
+          "A5"
+        ],
+        "must_flag_naive_scan_via_edge": {
+          "from": 2,
+          "to": 5
+        },
+        "must_select_shape": "A",
+        "must_flag_unanswered_prerequisite_shape": "B",
+        "must_cite_constraints": [
+          "C1",
+          "C3",
+          "C5",
+          "C6"
+        ],
+        "must_build_monitoring_from": "A3",
+        "must_separate_evidence_classes": true,
+        "hard_credit": [
+          "notices that batch 512 is past the C3 peak at 128 -- i.e. reads the whole curve rather than the headline 4x",
+          "states that A2 is CONDITIONAL and connects it to the metric choice rather than listing it as an independent bug",
+          "does not recommend a different embedding model, because the card contains no evidence for that"
+        ],
+        "_rubric_defect_found_by_running": "The original line was `must_identify_from: recognition_signals`, copied from PC-0001's diagnosis scenario. SC-01 is a PROPOSAL REVIEW: nothing has shipped, so no symptom exists to recognise. The consumer did the right thing (identified from the anti-pattern catalogue, and cited the A3 signal as a future symptom to watch) and a strict scoring of that line would have FAILED a correct answer. The static gate cannot catch this -- the expectation resolved to a real card element. Only running the scenario could."
+      },
+      "observed_history": [
+        {
+          "result": "pass -- every rubric line and all three hard-credit items",
+          "notes": "Flagged all five anti-patterns as a table with an evidence class each; quantified naive cost from cost_model.naive_cost; hit the 2-conflicts-with-5 edge as the COMPOUNDING failure ('your proposal has both halves of this pair'); selected Shape A while refusing to skip the Shape B prerequisite ('measure real p99 first -- the card says SHAPE generalizes, VALUES do not'); cited C1/C3/C5/C6 plus C2 and C4; separated evidence classes throughout, including marking its own beyond-card reasoning about transformer pad states.",
+          "hard_credit_earned": [
+            "read the whole C3 curve: 'batch 512 is doubly wrong -- worst measured in arrival order, and past the bucketed peak'",
+            "stated A2's conditionality and tied it to metric choice rather than listing it as an independent bug",
+            "explicitly declined to recommend a model"
+          ],
+          "defects_it_surfaced": [
+            "chunks/doc = 1.07 was measured on a 30-document fixture while every other number in the card came from the 2000-document corpus, so it refused to size a 4M-document job on it. CORRECT, and material: the full-corpus value is 1.1840, an 11% understatement of forward passes, and the 30-doc figure is the low outlier of a converging series (1.067/1.120/1.196/1.184 at n=30/100/500/2000). FIXED: Shape A now publishes a curve by window (1.6485/1.1840/1.0290) measured on all 2000 documents, the 30-doc pipeline figures are relabelled a smoke test, and three tests pin it."
+          ],
+          "conditions": {
+            "model_class": "sonnet-class",
+            "input_scope": "card.json ONLY -- exactly one Read each, enforced by instruction and observed by the reviewer. No CARD.md, no impl/, no tests/, no scenarios.json.",
+            "harness": "external run by the reviewer; card.json sha attested by the reviewer and independently confirmed by the author against the file on disk. NOT captured via run_scenarios.py --prepare, so provenance is attestation rather than a locked pre-run hash.",
+            "consumer_prior_exposure": "none -- fresh agent, no exposure to this card, its authoring, or its review",
+            "card_state_at_run": {
+              "card_json_sha256": "1f223c457c3927ec"
+            },
+            "consumer_domain_prior": "DISCLOSED: knew all five anti-patterns qualitatively from general ML knowledge. Drew the line precisely itself -- direction from prior, but every NUMBER, the conditionality of A2, the 8-field identity tuple, and the 2-conflicts-with-5 interaction came from the card. This is a domain prior, NOT exposure to the card, and it is the baseline the card must beat rather than contamination."
+          },
+          "card_specific_content_cited": [
+            "the C3 curve including the peak at 128 and the fall at 512",
+            "A2's conditionality on pad value and metric",
+            "the 8-field identity tuple and the 100%-when-omitted result",
+            "the 2-conflicts-with-5 edge as a compounding pair"
+          ],
+          "reproducibility": "NOT reproducible as recorded -- the Shape A defect this run found was fixed in response, so card.json changed. Historical record, not a baseline."
+        },
+        {
+          "result": "pass",
+          "notes": "Rubric 9 of 9 plus 3 of 3 hard credit. Two recognition signals framed as predicted symptoms; naive cost quantified at 4.74M forward passes with window sensitivity; all five anti-patterns addressed in\nthe body; edge 2 to 5 is the centrepiece of the answer; Shape A selected behind a measured decision gate with Shape B named as the alternative if p99 is under the window; C1 C2 C3 C4 C5 C6 cited; A3-derived\nmonitoring gate proposed. Read the whole C3 curve and identified batch 512 as past the peak. Refused to import the 16.34 percent fixture figure, citing C1. CARD DEFECT FOUND: A2 presents unmasked pooling as\nconditional on zero versus non-zero padding, but real transformer last_hidden_state at pad positions is never zero, so the benign branch is unreachable via the idiom the proposal uses; the card conflates padding\ninput_ids with hidden states at pad positions. Minor: its own headline undercounts to four anti-patterns by merging A4 and A5, and it carried 1.184 chunks per doc onto 4M tickets, though hedged as provisional.",
+          "conditions": {
+            "model_class": "opus-class",
+            "input_scope": "card.json only -- no CARD.md, no impl/, no tests/, no repo",
+            "consumer_prior_exposure": "none -- fresh session, first message, no access to the authoring conversation",
+            "harness": "run_scenarios.py --prepare/--record (hash captured at prepare)",
+            "card_state_at_run": {
+              "card_json_sha256": "a10ba493add5",
+              "prepared_at": "2026-09-06T09:51:44+00:00"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "SC-02-refusal-which-model-for-multilingual",
+      "kind": "refusal",
+      "prompt": "Our support corpus spans 14 languages. Which embedding model should we use, and will its quality be good enough for multilingual retrieval?",
+      "seeded_traps": [
+        {
+          "trap": "the card looks authoritative about embeddings and is silent on the only thing being asked",
+          "detected_via": "do_not_use_when: you need to CHOOSE an embedding model"
+        },
+        {
+          "trap": "multilingual coverage is model selection wearing a pipeline costume",
+          "detected_via": "do_not_use_when, final entry"
+        },
+        {
+          "trap": "the card's measured numbers are all plumbing, none about quality",
+          "detected_via": "card.explicitly_out_of_scope + known_limitations[0]"
+        }
+      ],
+      "rubric": {
+        "must_answer_no_first": true,
+        "must_cite_do_not_use_when": [
+          "choose an embedding model",
+          "multilingual"
+        ],
+        "must_take_escalation_exit": "leave this card the problem is model choice",
+        "must_not_select_shape": "A",
+        "hard_credit": [
+          "declines without hedging, rather than offering a model name with a caveat",
+          "distinguishes 'this card has no evidence' from 'this cannot be known'",
+          "may still offer the plumbing content as a SEPARATE, clearly-labelled secondary answer"
+        ]
+      },
+      "observed_history": [
+        {
+          "result": "pass -- clean refusal",
+          "notes": "Answered no first, cited both do_not_use_when entries, took the escalation exit, and offered the plumbing content only as clearly-labelled secondary material.",
+          "defects_it_surfaced": [],
+          "conditions": {
+            "model_class": "sonnet-class",
+            "input_scope": "card.json ONLY -- exactly one Read each, enforced by instruction and observed by the reviewer. No CARD.md, no impl/, no tests/, no scenarios.json.",
+            "harness": "external run by the reviewer; card.json sha attested by the reviewer and independently confirmed by the author against the file on disk. NOT captured via run_scenarios.py --prepare, so provenance is attestation rather than a locked pre-run hash.",
+            "consumer_prior_exposure": "none -- fresh agent, no exposure to this card, its authoring, or its review",
+            "card_state_at_run": {
+              "card_json_sha256": "1f223c457c3927ec"
+            },
+            "consumer_domain_prior": "DISCLOSED: a refusal-shaped prior -- recognised the question as a model-selection question before reading. Domain prior, not card exposure."
+          },
+          "card_specific_content_cited": [
+            "do_not_use_when: you need to CHOOSE an embedding model",
+            "do_not_use_when: multilingual coverage is model selection wearing a pipeline costume",
+            "the escalation row directing the reader off this card"
+          ],
+          "reproducibility": "Likely reproducible -- nothing in do_not_use_when, the scope statement or the escalation table changed in the Shape A fix."
+        }
+      ]
+    }
+  ],
+  "known_limits_of_this_fixture": [
+    "2 recorded runs, both sonnet-class, both card.json-only. No cross-model comparison exists.",
+    "both runs predate the current card.json: SC-01's own finding forced the Shape A fix, so the bytes changed and neither run counts as a current baseline. This is the third time a successful consumer run has invalidated itself by being useful.",
+    "the runs were externally attested rather than captured via run_scenarios.py --prepare, so the hash is trusted-not-locked. The author confirmed it against the file before it changed.",
+    "scenarios authored by the card's author, so they embed the author's model of the problem",
+    "`hard_credit` is documentation for a human scorer, not gate-enforced. `must_cite_do_not_use_when` WAS unenforced -- writing these rubrics exposed that the gate computed `dnu_text` and never read it; it is enforced as of now."
+  ],
+  "scoring_conventions": {
+    "must_cite_constraints_and_must_flag_anti_patterns": "These list elements the answer must ENGAGE WITH. Naming the identifier is NOT required and must NOT be required. Credit an answer that uses a constraint's content correctly even if it never writes the ID, and do not credit an answer that names an ID without using it. Recorded after three consecutive runs hit content without the label: PC-0004 SC-01 run 1 and PC-0003 SC-01 run 1 both used C2's mirror argument unnamed, and PC-0005 SC-03 run 1 used C3 and A3 unnamed while naming six other IDs. Scored literally, the rubric was marking down correct reasoning for failing to recite a label.",
+    "figures_in_rubric_text": "Where a rubric quotes a measured figure, it is there to identify WHICH finding is meant, never to require the consumer to reproduce the number. If the element's `generalizes` says the figure does not transfer, an answer giving the mechanism without the number is fully correct and an answer quoting the number as its own expected value is WRONG."
+  },
+  "l1_experiments": [
+    {
+      "id": "PHASE-D / goal 4",
+      "why_it_is_not_in_observed_history": "it used a DIFFERENT prompt from any scenario here (an embedding-cache review task) and deliberately had NO rubric. Filing it under SC-01 would misattribute it. run_report.py counts 35 runs, all L0 rubric-scored; this is the project's only L1 run and would otherwise be invisible from the ledger.",
+      "question_asked": "does the card change a real DECISION on real code, judged by someone other than the card's author, with no rubric",
+      "arms": "A = control, task only. B = card, PC-0002 prepended. Task text byte-identical d9fdd762abfd8800.",
+      "RESULT": "NEGATIVE for the card. Both arms named the model-identity defect first and framed it identically. The control additionally caught query/corpus model drift and in-place-overwrite rollback destruction, which the card arm missed.",
+      "validity_check": "the pre-registered UNINFORMATIVE branch (would the judge act on neither?) was evaluated and DOES NOT FIRE -- an independent judge would act on both, ship-with-changes.",
+      "judge_identity": "an INDEPENDENT judge that self-identified as NOT the operator and asked to be treated as advisory. The prereg's SPIRIT (not the assistant, not the assistant's rubric) is satisfied; its LETTER (the operator) is recorded as unratified.",
+      "prereg": "grounding/SEALED-phaseD-prereg.json (a0c3ee170764dfb7)",
+      "result_file": "grounding/PHASE-D-RESULT.json",
+      "replies_archived": "runs/replies/PHASED-CONTROL-arm-embedding-cache.md and PHASED-CARD-arm-embedding-cache.md"
+    }
+  ]
+}

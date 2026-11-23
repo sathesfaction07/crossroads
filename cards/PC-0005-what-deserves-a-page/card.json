@@ -1,0 +1,769 @@
+{
+ "id": "PC-0005",
+ "title": "Deciding what deserves to wake a human",
+ "one_line": "Choosing which signals page a person, given that the scarce resource is human attention and that attention is consumed by the wrong answers as much as the right ones.",
+ "domains": [
+  "on-call design",
+  "observability",
+  "operational readiness",
+  "alarm portfolios"
+ ],
+ "recognition_signals": [
+  "The alarm count for a service only ever goes up and nobody owns deletion.",
+  "Pages are routinely acknowledged and closed with no action taken.",
+  "An incident was detected by an alarm that fired and still ran long, because the page arrived in a batch with others.",
+  "Someone proposes a CAUSE-level alarm (connection count, queue depth, CPU) for a failure mode already covered by a SYMPTOM alarm (error rate, latency, availability).",
+  "A suppression / parent-child hierarchy is in place and is believed to be free.",
+  "People are arguing about the right NUMBER of alarms with no reference to how many pages per week the rotation absorbs.",
+  "Alarm review is a coverage exercise -- 'which failure modes lack an alarm?' -- with no matching question about what the existing ones cost.",
+  "The team can state its detection coverage but not its pages per responder per week."
+ ],
+ "do_not_use_when": [
+  "The signal does not interrupt a human (dashboards, async reports, autoscaling triggers).",
+  "The response is fully automated with no human in the loop.",
+  "You are designing the automation rather than the interrupt.",
+  "The service has no on-call rotation.",
+  "You need a defensible absolute alarm count -- this card measured that no such number exists (R2)."
+ ],
+ "selection_rule": {
+  "text": "Compute load divided by capacity FIRST, in pages per week over pages per week. That ratio sets the SIGN of every subsequent decision, so no per-alarm judgement is valid before it. At high ratio, choose between pruning (S1/S2/S3) and raising capacity (S4) -- both are measured levers. At low ratio the folk advice inverts and a redundant alarm is a small positive. Track the actionable fraction (S5) because it is the only signal observable without ground truth about missed incidents.",
+  "evidence": "executed",
+  "grounding": "simulator"
+ },
+ "solution_shapes": [
+  {
+   "id": "S1",
+   "name": "Symptom-first minimal portfolio",
+   "implemented": true,
+   "when": "load/capacity is already high, or you are starting fresh. One alarm per customer-visible failure mode; causes get dashboards.",
+   "cost": "0.69 pages/week at 3 alarms -- that means this shape spends page budget rather than alarm count, so weigh that budget against your on-call tolerance.",
+   "measured": {
+    "alarms": 3,
+    "pages_per_week": 0.69,
+    "detected_fraction": 0.948,
+    "acted_fraction": 0.882,
+    "acted_se": 0.011,
+    "actionable_fraction": 0.56
+   },
+   "measured_on": {
+    "what": "the simulator in impl/, 104 weeks at 0.5 incidents/week over 4 failure modes, capacity 5.0",
+    "population": "pc0005-simulator",
+    "n": 20
+   },
+   "limit": "Detection is 0.948, not 1.0. This shape knowingly trades ~5 points of coverage for handling. If a failure mode is genuinely uncovered, S1 does not say to skip it. That means the trade is deliberate and bounded, which is why a genuinely uncovered failure mode overrides it.",
+   "evidence": "executed",
+   "grounding": "simulator"
+  },
+  {
+   "id": "S2",
+   "name": "Route by actionability, not by correctness",
+   "implemented": true,
+   "when": "A signal is correct and precise but nothing can be done about it at 3am. Send it to a ticket or dashboard; it still records detection, it just stops consuming attention.",
+   "cost": "saves 0.57 pages/week -- that means roughly half a page a week, so weigh it against the detection it costs instead of adopting it on the saving alone.",
+   "measured": {
+    "pages_per_week_saved": 0.57,
+    "handling_effect": "UNMEASURED"
+   },
+   "measured_on": {
+    "what": "single seed (17), ~2 incidents of resolution -- the volume saving is real, the handling effect is not powered",
+    "population": "pc0005-simulator",
+    "n": 1
+   },
+   "limit": "The handling benefit is NOT powered and is deliberately not claimed. Real routing is also graded (multiple severity levels) where this model is binary -- see cited_evidence.",
+   "evidence": "executed",
+   "grounding": "simulator"
+  },
+  {
+   "id": "S3",
+   "name": "Declared suppression hierarchy",
+   "implemented": true,
+   "when": "There is genuine causal structure: a downstream alarm is a consequence of a known upstream cause. Mute children while the parent fires.",
+   "cost": "saves 0.37 pages/week, and loses a mean 1.2% of incidents. READ THE FIRST NUMBER AS A DECISION: 0.37 is roughly one third of one page per week, which against a loaded rotation's 9-14 pages per responder per week is a rounding error. So suppression IS NOT A VOLUME LEVER. If page volume is the problem, this shape does not address it and deletion or re-routing is the only thing that does; suppression's saving is concentrated in windows where a parent is already paging, which is precisely where the marginal cost of one more page is lowest. Choosing it to reduce load means paying a real incident cost to buy a saving too small to feel.",
+   "measured": {
+    "pages_per_week_saved": 0.37,
+    "detection_cost": "0.000 BY CONSTRUCTION -- a tautology, not a measurement",
+    "handling_cost_mean": 0.012,
+    "handling_cost_max": 0.0588,
+    "handling_cost_without_suppression": 0.0
+   },
+   "measured_on": {
+    "what": "30 seeds at infinite capacity and floor 1.0, so nothing is lost to fatigue and the entire gap is attributable to suppression",
+    "population": "pc0005-simulator",
+    "n": 30
+   },
+   "limit": "Do not use as a substitute for deleting alarms. Suppression here is week-granular, so it mutes across UNRELATED incidents -- that is the mechanism of the 1.2% loss, not an incidental bug. PRECONDITION, added after a naive consumer supplied it and measurement priced it (C9): the parent must cover EVERY failure mode the child covers. Hierarchies built on co-firing -- 'these alarms always go off together' -- encode correlation, not causality, and orphan 12.5% of detected incidents here against 2.9% when containment holds. Better still, key the mute to the INCIDENT rather than to a week: that drives orphaning to exactly zero whether or not containment holds, at the cost of ~44% of the volume relief, because a benign child firing has no incident to match against. If you cannot establish containment and cannot scope to the incident, do not build the hierarchy.",
+   "evidence": "executed",
+   "grounding": "simulator"
+  },
+  {
+   "id": "S4",
+   "name": "Raise capacity instead of pruning",
+   "implemented": true,
+   "when": "The alarms are genuinely all valuable and the rotation is the bottleneck. Add responders, reduce non-page toil, or move work out of the rotation.",
+   "cost": "shifts the marginal alarm's effect from -0.091 to +0.014 -- that means the sign flips rather than the magnitude merely shrinking, which is why this shape changes the decision and not just the number.",
+   "measured": {
+    "capacity_2": -0.091,
+    "capacity_5": -0.059,
+    "capacity_10": -0.014,
+    "capacity_20": 0.01,
+    "capacity_50": 0.014,
+    "monotone_across_all_five": true,
+    "page_volume_held_fixed_at": 3.01
+   },
+   "measured_on": {
+    "what": "40 seeds per capacity, portfolio and page volume held fixed so capacity is the only varying quantity",
+    "population": "pc0005-simulator",
+    "n": 40
+   },
+   "limit": "capacity is a model parameter chosen, not fitted to any real team. This shape is the one most exposed to that limitation.",
+   "evidence": "executed",
+   "grounding": "simulator"
+  },
+  {
+   "id": "S5",
+   "name": "Track the actionable fraction as the health signal",
+   "implemented": true,
+   "when": "Always, and especially if you can adopt only one shape -- it is the only one observable on a live rotation without ground truth about missed incidents.",
+   "cost": "computable from existing ticket history",
+   "measured": {
+    "at_3_alarms": 0.56,
+    "at_9_alarms": 0.19,
+    "at_27_alarms": 0.12,
+    "monotone": true
+   },
+   "measured_on": {
+    "what": "40 seeds per portfolio size, the share of pages that had a real incident behind them",
+    "population": "pc0005-simulator",
+    "n": 40
+   },
+   "limit": "It is a proxy. It tracks the handling collapse in this simulator but is not itself the handling number, and a low actionable fraction on a rotation with slack is not necessarily harmful (see S4).",
+   "evidence": "executed",
+   "grounding": "simulator"
+  }
+ ],
+ "rejected": [
+  {
+   "id": "R1",
+   "name": "Per-alarm precision or recall thresholds",
+   "why": "The harmful quantity is not a per-alarm property. The identical alarm measures -0.091 at capacity 2 and +0.014 at capacity 50, so no threshold evaluated on the alarm alone can produce the right answer. This was also the card's own first framing, and it was wrong: the simulator's `precision` field turned out never to be read by any logic.",
+   "evidence": "executed",
+   "grounding": "simulator"
+  },
+  {
+   "id": "R2",
+   "name": "A fixed alarm budget, 'at most N per service'",
+   "why": "There is no distinguishable interior optimum to budget against. The best portfolio measured was the smallest one tested (3 alarms, acted 0.882 +- 0.011) and it was not statistically separable from its neighbour. Any specific N would be fabricated. This is a correction to an earlier draft of this card, which named 6 on the strength of a single seed.",
+   "evidence": "executed",
+   "grounding": "simulator"
+  },
+  {
+   "id": "R3",
+   "name": "Optimising detection coverage",
+   "why": "Coverage saturates far earlier than anyone budgets for. Going from 3 to 33 alarms raises detection 0.948 -> 0.996 (+0.048) and lowers handling 0.882 -> 0.598 (-0.284): roughly 6:1 against, and entirely invisible to a team tracking coverage.",
+   "evidence": "executed",
+   "grounding": "simulator"
+  }
+ ],
+ "cost_model": {
+  "formula": "triage(load) = floor + (1 - floor) / (1 + (load / capacity) ** k)",
+  "definition": "capacity is DEFINED as the load at which triage falls halfway to the floor. floor exists because a buried responder still catches something; without it the model predicts total blindness and every high-volume claim becomes unfalsifiable.",
+  "parameters_are_chosen_not_fitted": "capacity=5.0, k=2.0, floor=0.15 for the headline runs. E10 demonstrates the SIGN of the main finding depends on capacity, which is why claim_strength is 'direction'.",
+  "constraints": [
+   {
+    "id": "C1",
+    "claim": "a marginal high-benign-rate alarm measurably harms a SMALL portfolio",
+    "measured": {
+     "at_3_alarms": -0.044,
+     "at_6_alarms": -0.059,
+     "at_9_alarms": -0.052,
+     "se_3": 0.011,
+     "se_6": 0.018,
+     "se_9": 0.013
+    },
+    "at": {
+     "capacity": 5.0,
+     "k": 2.0,
+     "floor": 0.15,
+     "seed_stride": 3
+    },
+    "evidence": "executed",
+    "grounding": "simulator",
+    "measured_on": {
+     "what": "40 independent seeds per point; each run is 104 weeks and ~52 incidents",
+     "population": "pc0005-simulator",
+     "n": 40
+    },
+    "generalizes": "NO as a magnitude. The transferable content is that the marginal cost is real and is paid in HANDLING while detection is unchanged."
+   },
+   {
+    "id": "C2",
+    "claim": "the same alarm has NO MEASURABLE EFFECT once the portfolio is large",
+    "measured": {
+     "deltas_12_to_27": [
+      -0.007,
+      -0.017,
+      -0.01,
+      -0.001,
+      -0.008,
+      0.019
+     ],
+     "all_within_2se": true
+    },
+    "at": {
+     "capacity": 5.0,
+     "alarms": "12..27"
+    },
+    "evidence": "executed",
+    "grounding": "simulator",
+    "measured_on": {
+     "what": "40 independent seeds per point",
+     "population": "pc0005-simulator",
+     "n": 40
+    },
+    "generalizes": "The claim is the ABSENCE of a measurable effect, not a zero. Reported as 'no measurable effect' rather than picking whichever sign suited the narrative."
+   },
+   {
+    "id": "C3",
+    "claim": "detection saturates almost immediately while handling collapses",
+    "measured": {
+     "detected_3": 0.948,
+     "detected_33": 0.996,
+     "detection_gain": 0.048,
+     "acted_3": 0.882,
+     "acted_33": 0.598,
+     "handling_loss": 0.284,
+     "ratio_against": "~6:1"
+    },
+    "evidence": "executed",
+    "grounding": "simulator",
+    "measured_on": {
+     "what": "20 independent seeds per portfolio size, 3..33 alarms",
+     "population": "pc0005-simulator",
+     "n": 20
+    },
+    "generalizes": "The SHAPE (early detection saturation, monotone handling decline) is the transferable claim. The 6:1 is this fixture's."
+   },
+   {
+    "id": "C4",
+    "claim": "there is NO distinguishable interior optimum in portfolio size",
+    "measured": {
+     "peak_acted": 0.882,
+     "peak_se": 0.011,
+     "peak_alarms": 3,
+     "points_within_noise_of_peak": 1,
+     "peak_is_distinguishable": false
+    },
+    "evidence": "executed",
+    "grounding": "simulator",
+    "measured_on": {
+     "what": "20 independent seeds per point across 31 portfolio sizes",
+     "population": "pc0005-simulator",
+     "n": 20
+    },
+    "generalizes": "This is a NEGATIVE result and it is the one that most changes behaviour: it forbids the alarm-budget answer everyone reaches for."
+   },
+   {
+    "id": "C5",
+    "claim": "the actionable fraction of pages tracks the collapse and needs no ground truth",
+    "measured": {
+     "at_3": 0.56,
+     "at_9": 0.19,
+     "at_27": 0.12
+    },
+    "evidence": "executed",
+    "grounding": "simulator",
+    "measured_on": {
+     "what": "40 independent seeds per point",
+     "population": "pc0005-simulator",
+     "n": 40
+    },
+    "generalizes": "The direction and the observability are transferable; the values are not."
+   },
+   {
+    "id": "C6",
+    "claim": "suppression's cost is invisible in detection and real in handling",
+    "measured": {
+     "detection_cost": 0.0,
+     "detection_cost_is_structural": true,
+     "handling_gap_mean": 0.012,
+     "handling_gap_max": 0.0588,
+     "handling_gap_without_suppression": 0.0
+    },
+    "at": {
+     "capacity": 1000000000.0,
+     "floor": 1.0
+    },
+    "evidence": "executed",
+    "grounding": "simulator",
+    "measured_on": {
+     "what": "30 seeds at infinite capacity so fatigue cannot contribute; the entire gap is suppression",
+     "population": "pc0005-simulator",
+     "n": 30
+    },
+    "generalizes": "The MECHANISM generalizes to any week-granular or time-window mute: the muted child can be an incident's only detector. The 1.2% does not. That means you may carry the design rule and never the rate, so recompute it against your own incident stream."
+   },
+   {
+    "id": "C7",
+    "claim": "the effect is regime-conditional and its SIGN flips with responder slack",
+    "measured": {
+     "capacity_2": -0.091,
+     "capacity_5": -0.059,
+     "capacity_10": -0.014,
+     "capacity_20": 0.01,
+     "capacity_50": 0.014,
+     "se": [
+      0.016,
+      0.018,
+      0.009,
+      0.007,
+      0.005
+     ],
+     "monotone_across_five_points": true,
+     "claimable_harm_only_at_capacity_leq": 5.0
+    },
+    "at": {
+     "pages_per_week": 3.01,
+     "portfolio": "6 alarms + treatment"
+    },
+    "evidence": "executed",
+    "grounding": "simulator",
+    "measured_on": {
+     "what": "40 seeds per capacity, page volume held fixed so capacity is the only variable",
+     "population": "pc0005-simulator",
+     "n": 40
+    },
+    "generalizes": "The QUALITATIVE claim -- that the sign is set by the rotation's slack and not by the alarm -- is the card's core content. Five monotone points are stronger evidence than any one clearing 2x its SE."
+   },
+   {
+    "id": "C8",
+    "claim": "attention coupling IS the mechanism, not a correlate",
+    "measured": {
+     "delta_mechanism_live": -0.0442,
+     "se_live": 0.0114,
+     "live_is_claimable": true,
+     "delta_mechanism_off": 0.0135,
+     "se_off": 0.0076,
+     "off_is_claimable": false
+    },
+    "evidence": "executed",
+    "grounding": "simulator",
+    "measured_on": {
+     "what": "ablation over 40 strided seeds on BOTH arms: couple_load=False makes benign pages consume no attention. Raised from n=1 because the gate objected that the experiment validating the mechanism was held to a weaker standard than the experiments measuring it.",
+     "population": "pc0005-simulator",
+     "n": 40
+    },
+    "generalizes": "An effect that survives its own mechanism being switched off is a coincidence. With the mechanism live the harm is claimable (-0.0442, SE 0.0114); with it disabled the delta is NOT distinguishable from zero (+0.0135, SE 0.0076). Note it is not exactly zero -- the honest claim is indistinguishability, not absence. That means the placebo arm licenses withholding the causal claim rather than asserting no effect, so do not report it as a null."
+   },
+   {
+    "id": "C9",
+    "claim": "suppression needs CONTAINMENT or INCIDENT SCOPING, and scoping is the stronger of the two. A parent/child relationship is only safe if the parent covers every failure mode the child covers; hierarchies are usually built on CO-FIRING ('these go off together'), which is correlation, not containment. Measured over 30 seeds with the child held fixed and only the parent's coverage varying: at week granularity, co-firing orphans 12.5% of detected incidents against 2.9% when containment holds -- an incident is ORPHANED when every alarm that detected it was muted, which no detection-side dashboard can show. But incident-scoped muting drives orphaning to exactly 0.0000 in BOTH rows, so containment is a mitigation for coarse temporal muting rather than the fundamental requirement. Scoping costs volume: it cannot mute benign child firings, since a benign firing has no incident to match against, and it gives up 44% of the page relief (0.150 vs 0.265 pages/week). Orphaning is a DIFFERENT quantity from C6's 1.2% handling gap and must not be quoted as a revision of it.",
+    "evidence": "executed",
+    "grounding": "simulator",
+    "generalizes": "Two parts, different strengths. The STRUCTURAL claim transfers and is the useful one: a mute keyed to a time window can silence a detector for an incident its parent never saw, whereas a mute keyed to an incident cannot, by construction -- that is a property of the keying, not of this fixture. The ORDERING transfers: co-firing orphans more than containment, and scoping beats both. The MAGNITUDES (12.5%, 2.9%, 44%) are this fixture's and depend on how much coverage the child holds alone; a child that shares every mode with its parent cannot be orphaned at all, and one that shares none is orphaned whenever the parent fires. Measure your own overlap. Also note the 0.0000 is exact rather than approximate: incident-scoped muting cannot orphan, because the parent having fired FOR THAT INCIDENT is the mute's precondition."
+   }
+  ],
+  "breakpoints": [
+   {
+    "id": "B1",
+    "quantity": "load / capacity",
+    "value": 0.6,
+    "comparator": ">=",
+    "unit": "dimensionless ratio of pages*week^-1 to pages*week^-1",
+    "meaning": "adding a high-benign-rate alarm measurably costs handling (-0.059, SE 0.018)",
+    "evidence": "executed",
+    "grounding": "simulator"
+   },
+   {
+    "id": "B2",
+    "quantity": "load / capacity",
+    "value": 0.3,
+    "comparator": "<=",
+    "unit": "dimensionless ratio of pages*week^-1 to pages*week^-1",
+    "meaning": "no measurable effect in either direction (-0.014, SE 0.009)",
+    "evidence": "executed",
+    "grounding": "simulator"
+   },
+   {
+    "id": "B3",
+    "quantity": "load / capacity",
+    "value": 0.06,
+    "comparator": "~=",
+    "unit": "dimensionless ratio of pages*week^-1 to pages*week^-1",
+    "meaning": "the same alarm measurably HELPS (+0.014, SE 0.005); the folk rule is false here",
+    "evidence": "executed",
+    "grounding": "simulator"
+   },
+   {
+    "id": "B4",
+    "quantity": "portfolio size",
+    "value": 3,
+    "comparator": ">=",
+    "unit": "alarms",
+    "meaning": "detection is already 0.948; coverage saturation is this early",
+    "evidence": "executed",
+    "grounding": "simulator"
+   },
+   {
+    "id": "B5",
+    "quantity": "actionable fraction of pages",
+    "value": 0.2,
+    "comparator": "<",
+    "unit": "dimensionless fraction of pages that had a real incident behind them",
+    "meaning": "the degraded band; reached at 9+ alarms in this fixture",
+    "evidence": "executed",
+    "grounding": "simulator"
+   }
+  ],
+  "honest_limit_on_the_axes": "E10 varies capacity at a fixed portfolio and reports load/capacity measured AFTER the treatment alarm is added. E8 varies portfolio at fixed capacity and reports page rate BEFORE. B1-B3 come from E10 and B4-B5 from E8. The two x-axes are NOT interchangeable and must not be fused into a single unified threshold. They agree only that the sign is not context-free."
+ },
+ "decomposition": {
+  "nodes": [
+   {
+    "n": 1,
+    "name": "Enumerate customer-visible failure modes",
+    "output": "the set of things a page could legitimately be about; causes are not on this list"
+   },
+   {
+    "n": 2,
+    "name": "Measure current pages per responder per week",
+    "output": "load, in pages*week^-1"
+   },
+   {
+    "n": 3,
+    "name": "Estimate capacity",
+    "output": "the page rate at which triage begins to degrade, in the SAME unit as load"
+   },
+   {
+    "n": 4,
+    "name": "Compute load / capacity",
+    "output": "the regime, which determines the SIGN of every decision below"
+   },
+   {
+    "n": 5,
+    "name": "Measure the actionable fraction of recent pages",
+    "output": "the ground-truth-free health signal"
+   },
+   {
+    "n": 6,
+    "name": "For each proposed alarm, ask what it covers that nothing else does",
+    "output": "coverage delta, usually zero for cause-level alarms"
+   },
+   {
+    "n": 7,
+    "name": "Choose routing per alarm",
+    "output": "page / ticket / dashboard -- who, if anyone, gets woken"
+   },
+   {
+    "n": 8,
+    "name": "If load/capacity is high, choose between pruning and raising capacity",
+    "output": "a decision naming which of S1-S4 applies"
+   }
+  ],
+  "edges": [
+   {
+    "from": 2,
+    "to": 4,
+    "why": "the ratio is undefined without a measured load, and a guessed load makes step 4 unfalsifiable"
+   },
+   {
+    "from": 3,
+    "to": 4,
+    "why": "capacity must be in the same unit as load or the ratio is meaningless -- this is the most common place the analysis silently breaks"
+   },
+   {
+    "from": 4,
+    "to": 6,
+    "why": "the sign of 'is this alarm worth it' is set by the regime, so per-alarm judgement CANNOT be answered before step 4. This edge is the card's main structural claim."
+   },
+   {
+    "from": 1,
+    "to": 6,
+    "why": "coverage delta is defined against the failure-mode list, not against the existing alarm list; comparing against existing alarms is how cause-level duplicates get justified"
+   },
+   {
+    "from": 4,
+    "to": 8,
+    "why": "the prune-versus-capacity choice only arises in the loaded regime; below B2 neither lever measurably matters"
+   },
+   {
+    "from": 5,
+    "to": 8,
+    "why": "the actionable fraction is what tells you the pruning worked, because detection will not move (C3) and missed-incident ground truth does not exist"
+   },
+   {
+    "from": 6,
+    "to": 7,
+    "why": "an alarm with zero coverage delta can still be worth keeping as a ticket or dashboard; routing is a separate decision from existence"
+   }
+  ]
+ },
+ "anti_patterns": [
+  {
+   "id": "A1",
+   "name": "The post-incident ratchet",
+   "symptom": "an alarm is added after every incident review; the count rises monotonically and nobody owns deletion",
+   "measured": {
+    "alarms": "3 -> 33",
+    "actionable_fraction": "0.56 -> 0.12",
+    "acted": "0.882 -> 0.598"
+   },
+   "measured_on": {
+    "what": "20-40 seeds per point",
+    "population": "pc0005-simulator",
+    "n": 20
+   },
+   "fix": "every addition must name an uncovered failure mode from step 1, or it is a dashboard",
+   "evidence": "executed",
+   "grounding": "simulator"
+  },
+  {
+   "id": "A2",
+   "name": "Judging an alarm in isolation",
+   "symptom": "review asks 'is this alarm good?' and never 'what is our load/capacity?'",
+   "measured": {
+    "same_alarm_at_capacity_2": -0.091,
+    "same_alarm_at_capacity_50": 0.014
+   },
+   "measured_on": {
+    "what": "40 seeds per capacity, volume held fixed",
+    "population": "pc0005-simulator",
+    "n": 40
+   },
+   "fix": "compute the ratio first; the ratio sets the sign",
+   "evidence": "executed",
+   "grounding": "simulator"
+  },
+  {
+   "id": "A3",
+   "name": "Optimising coverage",
+   "symptom": "the alarm review is a gap analysis with no cost side",
+   "measured": {
+    "detection_gain": 0.048,
+    "handling_loss": 0.284
+   },
+   "measured_on": {
+    "what": "20 seeds, 3 -> 33 alarms",
+    "population": "pc0005-simulator",
+    "n": 20
+   },
+   "fix": "track handling, or its observable proxy in S5",
+   "evidence": "executed",
+   "grounding": "simulator"
+  },
+  {
+   "id": "A4",
+   "name": "Believing suppression is free",
+   "symptom": "'the hierarchy means we lose nothing'",
+   "measured": {
+    "detection_cost": "0.000 -- STRUCTURAL, detection is recorded before suppression runs and cannot move",
+    "handling_cost_mean": 0.012,
+    "handling_cost_max": 0.0588
+   },
+   "measured_on": {
+    "what": "30 seeds at infinite capacity, so the gap is attributable to suppression alone",
+    "population": "pc0005-simulator",
+    "n": 30
+   },
+   "fix": "scope suppression to the incident rather than the week, and never quote a zero that is structural. AND READ THE SIZE AS A DECISION, because it is the reason this anti-pattern survives: a mean 1.2% loss with a 5.9% worst case is SMALL IN ABSOLUTE TERMS. That smallness is not reassurance, it is the mechanism of the trap -- a loss that rare will always arrive as a single memorable incident with no pattern around it, so every honest team that hits it will classify it as a one-off, and will be wrong. Do not wait for a rate to become visible before acting; at this magnitude a rate is not going to become visible. Treat the FIRST orphaned incident as the mechanism firing, because a second one is years away and proves nothing new.",
+   "evidence": "executed",
+   "grounding": "simulator"
+  },
+  {
+   "id": "A5",
+   "name": "Generalising from one rotation",
+   "symptom": "'we added it and nothing bad happened'",
+   "measured": {
+    "delta_range_across_12_seeds": [
+     -0.234,
+     0.056
+    ],
+    "harmed_in": "8/12",
+    "mean": -0.057
+   },
+   "measured_on": {
+    "what": "12 seeds of the identical experiment",
+    "population": "pc0005-simulator",
+    "n": 12
+   },
+   "fix": "treat one rotation's experience as a single sample from a distribution wider than the effect",
+   "evidence": "executed",
+   "grounding": "simulator",
+   "generalizes": "DIRECTION only, and weakly even for that -- which is the point of publishing it. 8 of 12 seeds harmed with a delta range of [-0.234, 0.056] spans zero, so the sign is NOT established at n=12 and the mean of -0.057 must not be reported as an effect. This entry exists as the card's own demonstration that one seed is an anecdote; do not quote 8/12 as a probability of harm."
+  },
+  {
+   "id": "A6",
+   "name": "Paging on a correct but un-actionable signal",
+   "symptom": "a page whose runbook says 'file a ticket in the morning'",
+   "measured": {
+    "pages_per_week_saved_by_rerouting": 0.57,
+    "handling_effect": "UNMEASURED -- single seed"
+   },
+   "measured_on": {
+    "what": "single seed; only the volume saving is claimed",
+    "population": "pc0005-simulator",
+    "n": 1
+   },
+   "fix": "route by what can be done at 3am, not by whether the signal is correct",
+   "evidence": "executed",
+   "grounding": "simulator"
+  },
+  {
+   "id": "A7",
+   "name": "Setting an alarm budget",
+   "symptom": "'max 10 alarms per service'",
+   "measured": {
+    "peak_alarms": 3,
+    "points_within_noise_of_peak": 1,
+    "peak_is_distinguishable": false
+   },
+   "measured_on": {
+    "what": "20 seeds across 31 portfolio sizes",
+    "population": "pc0005-simulator",
+    "n": 20
+   },
+   "fix": "budget the page rate against capacity, which has units and a measured breakpoint, rather than the alarm count, which does not",
+   "evidence": "executed",
+   "grounding": "simulator",
+   "fix_fleet_caveat": "The fix as written depends on load/capacity being computable. It is not -- see B1.fleet_check. Rejecting a count-based budget remains supported by C4; the proposed REPLACEMENT does not currently have an observable denominator."
+  },
+  {
+   "id": "A8",
+   "name": "Building a suppression hierarchy on co-firing instead of containment",
+   "symptom": "the parent/child relationships were chosen because 'these alarms always go off together', and one incident is eventually found late by something other than monitoring",
+   "measured": "co-firing parents orphan 12.5% of detected incidents at week granularity versus 2.9% for containment-respecting parents, 30 seeds, child held fixed. Detection-side metrics report 0.000 cost in every one of those cases, because detection is recorded before the mute runs. That means the detection-side metric cannot see this cost at all, so orphaning must be measured on the incident side.",
+   "measured_on": {
+    "what": "2x2 of {containment, co-firing} x {week-granular, incident-scoped} muting",
+    "population": "pc0005-simulator",
+    "n": 30
+   },
+   "fix": "run the containment test on every existing pair -- does the parent cover every failure mode the child covers? -- and treat any failure as either a deletion decision or a standalone alarm, not as a child. Then prefer to re-key the mute to the INCIDENT rather than to a time window, which drives orphaning to zero regardless of containment and makes the test moot. Budget for the volume: incident-scoping cannot mute benign child firings and gives up roughly half the page relief in this fixture.",
+   "evidence": "executed",
+   "grounding": "simulator",
+   "generalizes": "The mechanism and the ordering generalize; the percentages are fixture-specific and scale with how much coverage the child holds alone. FOUND BY A CONSUMER, not by the author: an opus-5 session with no access to this card produced the containment test unprompted while refusing a hierarchy-expansion plan, and the card had no precondition on S3 at all."
+  },
+  {
+   "id": "A9",
+   "name": "Never auditing for children that have never fired",
+   "symptom": "a child alarm nobody has seen fire in months is assumed to be quiet, and the suppression hierarchy is exactly what makes its silence indistinguishable from being broken",
+   "fix": "audit for children that have never fired -- a child nobody has seen fire is more often broken than quiet, and the hierarchy hides it. Run this on the existing hierarchy before expanding it: a never-fired child is either dead configuration or a detector whose failure mode has not occurred yet, and those two need opposite responses. The hierarchy cannot tell you which, because a muted child and a broken child produce the same evidence -- nothing.",
+   "evidence": "reasoned",
+   "grounding": "analytic",
+   "generalizes": "GENERALIZES, and it carries NO measured magnitude -- this card has no experiment on it. It is argued from the same asymmetry C6 measures: suppression makes absence of signal uninformative, so any monitoring arrangement that can silence a detector needs a liveness check on that detector. Contributed verbatim by a naive consumer, twice, unprompted."
+  }
+ ],
+ "escalation": [
+  {
+   "symptom": "actionable fraction below 0.2 and falling",
+   "action": "stop adding alarms; prune or raise capacity before any new coverage work"
+  },
+  {
+   "symptom": "an incident was detected but ran long, and other pages fired in the same window",
+   "action": "this is the handling failure the card is about; audit page volume in that window, not alarm coverage"
+  },
+  {
+   "symptom": "load/capacity above 0.6 and pruning is politically blocked",
+   "action": "escalate as a staffing and toil decision (S4), not an observability one -- the measured lever is capacity"
+  },
+  {
+   "symptom": "suppression hierarchy in place and incidents are being missed",
+   "action": "check whether a muted child was the only detector; week-granular suppression mutes across unrelated incidents"
+  },
+  {
+   "symptom": "a proposed alarm covers a mode already covered",
+   "action": "route to dashboard or ticket by default; require a named uncovered failure mode for a page"
+  },
+  {
+   "symptom": "nobody can state the rotation's pages per week",
+   "action": "stop -- steps 2-4 are prerequisites and without them every later judgement has an undetermined sign"
+  },
+  {
+   "symptom": "someone quotes a number from this card onto a real rotation",
+   "action": "REFUSE. These are simulator magnitudes at claim_strength 'direction'; the transferable content is the ordering and the shapes, not the decimals."
+  },
+  {
+   "symptom": "a suppression hierarchy exists and nobody can say whether each parent covers its child's modes",
+   "action": "stop expanding it. Run the containment test on the existing pairs first (C9). An unverified hierarchy is an unrecorded coverage deletion, and the detection metrics will report zero cost for it however bad it is."
+  }
+ ],
+ "related_cards": [
+  {
+   "id": "PC-0003",
+   "relation": "composes_with",
+   "why": "In both cards a mechanism added for safety becomes the dominant source of harm as volume rises -- a retry that duplicates work, an alarm that consumes the attention needed to act on the next one. In both, the naive fix amplifies the problem it was meant to address."
+  },
+  {
+   "id": "PC-0004",
+   "relation": "composes_with",
+   "why": "PC-0004's SILENT_WRONG verdicts are the class of failure no cause-level metric can see -- nothing saturates, nothing errors, the data is simply wrong. That is a direct argument for this card's symptom-first shape (S1) and against the cause-level alarm A1 describes, so the two compose: PC-0004 supplies a failure mode that only symptom or data-quality alarms detect."
+  }
+ ],
+ "cited_evidence": [
+  {
+   "path": "private:ml-platform-monitoring-stack-1.ts (one of five CDK stacks read; not shippable)",
+   "what": "Real production CDK alarm portfolios cluster at 10-12 alarms per monitoring stack: five stacks read across two ML-platform organizations, alarm counts 12, 11, 11, 11, 10 (sources private to their owners).",
+   "why_it_matters": "Real services sit in exactly the band where this card's powered curve shows handling already down to 0.68-0.75 from 0.882 at three alarms. The regime the card measures is the regime production code operates in, which is what makes the card relevant rather than a toy.",
+   "honest_limit": "This corroborates that the REGIME is real. It says nothing about whether the handling magnitudes are right, and I did not measure any real rotation's pages per week or capacity. Counting `new *Alarm(` per file is also a proxy for portfolio size -- some stacks compose alarms in loops or factories.",
+   "evidence": "cited",
+   "grounding": "production-data",
+   "corroborates": "regime",
+   "corroborates_why": "Corroborates the REGIME only, and says so in its own honest_limit: real CDK alarm portfolios cluster at 10-12 per monitoring stack, which is the band where this card's curve shows handling already degraded. It does NOT corroborate any handling magnitude -- no real rotation's pages per week or capacity was measured. This is exactly why claim_strength stays 'direction'."
+  },
+  {
+   "path": "private:page-vs-ticket-alarm-routing.ts (source not shippable)",
+   "what": "Production page-versus-ticket routing for CloudWatch alarms: a graded severity enum spanning page and ticket tiers, an ownership taxonomy and an optional escalation target (source private).",
+   "why_it_matters": "Independent confirmation that S2 -- routing by actionability rather than correctness -- is an existing production practice with first-class tooling, not something this card invented. It also shows real routing is GRADED across five severities where this simulator's `actionable_at_3am` is binary.",
+   "honest_limit": "The graded/binary mismatch is a limitation of my model, not of the practice. A five-level severity dial can express 'wake someone slowly', which this simulator cannot represent at all, so S2's measured volume saving is an upper-bound simplification of what real routing does.",
+   "evidence": "cited",
+   "grounding": "production-data",
+   "corroborates": "practice",
+   "corroborates_why": "Corroborates that S2 -- routing by actionability rather than correctness -- is existing production PRACTICE with first-class tooling. It also reveals a limitation of the model: real routing is GRADED across five severities where this simulator's actionable_at_3am is binary, so the measured volume saving is an upper-bound simplification. That is a reason to trust the direction and not the magnitude."
+  },
+  {
+   "path": "problem-cards/grounding/PC0006-PREVALENCE-PASS2.json",
+   "what": "Two legitimate production pipelines encode the same daytime-paging tier with different vocabularies: one stores a ticket severity plus a business-hours auto-upgrade policy, the other emits a lower severity plus an exact-string text header and no upgrade flag; a shared alarm library on the second path (read end-to-end) emits no upgrade field at all (sources private).",
+   "why_it_matters": "Any measurement of this card's quantities that selects the paging tier by currentSeverity sees the first pipeline and silently misses the second. This card's own severity correction already retracted one measurement over the 2.5 tier; this footnote records that even the corrected query undercounts, because part of the tier is expressed as a text label the severity field never carries. It is a vocabulary mismatch between two valid systems, not a defect count.",
+   "honest_limit": "Prevalence was measured and is UNRESOLVABLE against the pre-registered denominator: the same evidence yields a justified, ambiguous, or dead fraction depending on two judgement calls that were not pre-registered (whether replications of one documented convention count as independent sites, and whether an exact-matched label is a defect or a second valid interface). A proposed sixth card on this encoding was killed on distinctiveness -- the encoding is documented in the SDK model every consumer already has on disk. This footnote is the surviving residue, not a claim of broken implementations.",
+   "evidence": "cited",
+   "grounding": "production-data",
+   "corroborates": "mechanism",
+   "corroborates_why": "Corroborates the MECHANISM by which measurements of this card's quantities go wrong -- two valid pipelines expressing one paging tier in different vocabularies -- not any handling magnitude. Recorded per that file's DECISION.apply_as: a footnote on PC-0005, not a sixth artifact.",
+   "unshipped": true
+  }
+ ],
+ "not_published": [
+  {
+   "what": "E1 at seed 17: delta +0.056, 'the noisy alarm helps'",
+   "why": "40 seeds give -0.044. Same experiment, opposite sign, because one incident out of ~52 is 0.019. Retained as a regression test."
+  },
+  {
+   "what": "E6's 'FIRST HARM at 7 alarms / 2.55 pages per week'",
+   "why": "single-seed sequence swinging -0.148, -0.037, -0.148, -0.315, 0.000, +0.019 -- noise with a decimal point."
+  },
+  {
+   "what": "E7's 'peak acted 0.907 at 6 alarms'",
+   "why": "OVERTURNED by E9. 6 had been drafted as the recommended portfolio size; with power the peak is at the smallest size tested and is not separable from its neighbour."
+  },
+  {
+   "what": "E3's 'detection cost 0.000' as a measurement",
+   "why": "structural, not measured -- detection is recorded before suppression runs. See AP4."
+  },
+  {
+   "what": "E5's handling delta of -0.037",
+   "why": "one seed, ~2 incidents. Only the 0.57 pages/week volume saving is reported."
+  },
+  {
+   "what": "the 45-cell parameter sweep's per-cell verdicts ('harms in 9/45')",
+   "why": "one seed per cell. Only the coarse pattern was trusted, and only after E10 reproduced it with 40 seeds per point."
+  }
+ ],
+ "tests": {
+  "count": 31
+ },
+ "authoring": {
+  "measure_first": true,
+  "note": "Six defects were found before any prose existed: an attribution bug that made redundant alarms appear to HELP (load counted from the deduped page list, credit assigned from the same list, so N correlated alarms manufactured N chances to act); a fixture sitting in a regime where the intended effect was unmeasurable (0.78 pages/week against capacity 5); a decorative `precision` field the experiments were named after but no logic read; seed overlap that understated every standard error by ~38%; a tautological detection-cost of zero; and a single-seed boundary that was ~1-incident noise. Two drafted claims were overturned. One test failed for demanding less power of itself than the claim demanded. One test failed because its PREMISE was wrong -- and investigating rather than loosening it produced C6, the card's most useful finding.",
+  "mutation_verified": "7 defects reintroduced one at a time, including making `capacity` inert as a direct attack on C7; the suite failed on every one and returned byte-identical and green."
+ },
+ "claim_strength": "direction",
+ "claim_strength_rationale": "Corroborating production code exists and is cited, which would permit 'magnitude' under the portfolio rule. It is deliberately NOT taken. The corroboration establishes that the problem, the portfolio sizes and the routing practice are real; it does not validate a single magnitude. Every number comes from a simulator whose capacity, k and floor were chosen rather than fitted, and C7 shows the SIGN of the headline finding depends on capacity. Declaring 'magnitude' here would be the overselling this portfolio exists to avoid."
+}

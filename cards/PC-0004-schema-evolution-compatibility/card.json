@@ -1,0 +1,469 @@
+{
+ "id": "PC-0004",
+ "title": "Evolving a serialized contract without silently corrupting data",
+ "one_line": "Deciding whether a schema change is safe, in which deploy order, and why the answer depends on what the codec keys on rather than on the change itself.",
+ "domains": [
+  "schema evolution",
+  "serialization",
+  "backward compatibility",
+  "rolling deploys"
+ ],
+ "recognition_signals": [
+  "a schema diff is one line and the review has no way to say whether it is safe",
+  "a field was added weeks ago and a fraction of rows still hold its default, with no errors logged anywhere",
+  "the error rate is flat and unremarkable while a reconciliation reports rows that do not add up",
+  "the same change was applied to two services and only one of them broke",
+  "a field was removed, its number or column position was later reused, and old records now decode into the new field",
+  "a rolling deploy is clean in staging, where only one version is ever live at a time",
+  "a compatibility checker passed the change and the data is wrong anyway",
+  "an old reader edits one field of a record and the fields it does not know about come back empty"
+ ],
+ "do_not_use_when": [
+  "the contract is IN FLIGHT ONLY -- a synchronous call, or a queue fully drained before the deploy -- AND has exactly one writer and one reader deployed atomically together. Then there is genuinely no version window and none of this applies. CRITICAL LIMIT, added after a naive consumer run rejected the earlier wording: this exclusion does NOT extend to a PERSISTED artifact. A file, table, object-store entry, or a cache with a TTL longer than your deploy OUTLIVES the deploy, so the code version that WROTE the data and the version that READS it are separated by the DATA's lifetime, not by the deploy's atomicity. Worse, the usual safe ordering makes the skew CERTAIN rather than merely possible: stopping the writer before replacing the reader -- which you do to prevent concurrent writes -- guarantees that the new reader's first read is of data the OLD writer produced. If the payload is at rest, you are in scope even with one writer, one reader, and one atomic pipeline.",
+  "the payload is a cache entry that may be discarded: correctness on read is optional and eviction is the whole answer CRITICAL LIMIT, added after a consumer run on exactly this exclusion: \"correctness on read is optional\" is too strong. Eviction bounds how LONG defaulted records survive; it does nothing about whether your reader can tell a defaulted field from a real one WHILE they survive. If a newly added field is absent on every pre-TTL entry and the renderer reads its default as data, you serve wrong output for up to one full TTL with a green deploy and a flat error rate. The exclusion holds for the SCHEMA MIGRATION -- you genuinely do not need expand/migrate/contract -- and it does NOT excuse you from explicit presence on the new fields. Treat absent as a cache MISS and re-render; that converts a silent wrong page into a miss, which is the failure you want.",
+  "the format is self-describing per record AND every reader reflects over it dynamically, with no compiled schema to disagree with",
+  "the decision is about API surface design rather than an existing contract with live data behind it",
+  "you own and can atomically redeploy every reader and writer, AND can atomically replace or regenerate the DATA in the same operation -- or can tolerate a full stop-the-world that includes rewriting it -- see R1, which is then correct. Note the second clause carefully: redeploying code atomically while leaving old-format data in place is NOT a stop-the-world, it is precisely the window this card exists for."
+ ],
+ "selection_rule": {
+  "text": "Establish what the codec keys on FIRST -- field name, field number, or ordinal position -- because every subsequent answer changes with it. Then look up the change in the matrix. If the required deploy order is 'either', ship it. If 'writers', ship writers first. If IMPOSSIBLE, no ordering exists and you must decompose into S1 or adopt S3. Independently of all of that: if any reader performs read-modify-write, S4 is mandatory and is not an alternative to the others.",
+  "evidence": "executed",
+  "grounding": "simulator"
+ },
+ "solution_shapes": [
+  {
+   "id": "S1",
+   "name": "Expand / migrate / contract -- three deploys, never fewer",
+   "implemented": true,
+   "when": "the matrix reports IMPOSSIBLE for your change on your codec: neither deploy order is safe, so no single-step version of the change exists",
+   "cost": "three sequential deploys plus a backfill; the old and new field coexist for the whole window",
+   "measured": "6 of 27 (change, codec) pairs are IMPOSSIBLE in one step; 5 distinct changes are IMPOSSIBLE on at least one codec: insert_in_middle, rename_field, renumber_field, reorder_fields, reuse_retired_tag",
+   "measured_on": {
+    "what": "compatibility_matrix + required_deploy_order",
+    "population": "9 changes x 3 codecs x 2 directions",
+    "n": 54
+   },
+   "limit": "requires that both fields can coexist. A positional codec cannot hold a widened row without also being an insert, so S1 degrades to S3 there.",
+   "evidence": "executed",
+   "grounding": "simulator",
+   "generalizes": "TRANSFERS as an exact statement about the enumerated set, not as a universal rate. 6 of 27 and 5 distinct changes are exact over the 9 changes x 3 codecs enumerated here; adding a codec or a change moves the count. What generalizes is the finding the count exists to support: impossibility is a property of the (change, codec) PAIR, so no list of 'safe schema changes' can be correct without naming the codec."
+  },
+  {
+   "id": "S2",
+   "name": "Additive-only with permanently frozen fields",
+   "implemented": true,
+   "when": "one or more readers are outside your control, so the contract can never be narrowed and 'we will migrate them later' is not available",
+   "cost": "the schema only grows; retired names, numbers and offsets are never reclaimed",
+   "measured": "add_optional is the only structural change SAFE in all 6 cells (3 codecs x 2 directions); remove_field also measures SAFE in a single hop, which is exactly what makes it a trap -- see A4 CRITICAL QUALIFIER, added after a naive consumer declined to reuse this cell: remove_field's SAFE result on a POSITIONAL codec holds only because the fixture removes the LAST column. Measured on a NON-TERMINAL removal (drop amount_cents, index 1 of 4) the positional codec is SILENT_WRONG in BOTH directions -- IMPOSSIBLE in this card's vocabulary, so no deploy ordering exists. Named and tagged stay SAFE either way. On a positional codec the answer to \"is removal safe\" depends on WHERE the column sits, and the 9-change matrix does not vary that axis. SECOND QUALIFIER, added after a consumer run: SAFE here is a CODEC verdict, not an application one. `roundtrip` defines the pass condition for add_optional as the writer-unknown field coming back as the READER'S DEFAULT -- and measured, that is what happens in 1000 of 1000 pre-existing records. A record written before the field existed and a record whose true value simply equals the default decode IDENTICALLY, so without explicit presence no reader can separate them. An application that treats the default as data (0 in stock, 0.00 price, an empty list read as \"none\") is therefore silently wrong while this matrix says SAFE. Declare new fields with explicit presence and branch on presence, not on value.",
+   "measured_on": {
+    "what": "compatibility_matrix",
+    "population": "add_optional and remove_field rows",
+    "n": 12
+   },
+   "limit": "monotonic growth is a real cost that arrives later as dead fields nobody dares delete; it buys safety with permanent surface area.",
+   "evidence": "executed",
+   "grounding": "simulator",
+   "generalizes": "SPLIT, and the split is a codec property. add_optional's 6-of-6 and remove_field's single-hop safety transfer for KEYED codecs (named, tagged), because nothing there depends on position. The positional removal cell does NOT transfer: it is TERMINAL-ONLY, and a non-terminal removal measures SILENT_WRONG in both directions. So do not read a positional verdict out of this matrix at all -- treat every positional structural edit as position-dependent and take the escalation exit for positional formats. This limitation was invisible to the static gate because the measurement was real; the fixture simply never varied the column's position."
+  },
+  {
+   "id": "S3",
+   "name": "Versioned envelope -- readers branch on an explicit version",
+   "implemented": false,
+   "when": "the change is IMPOSSIBLE and you cannot sequence deploys, or the codec is positional and therefore has no safe structural edit at all",
+   "cost": "every reader carries every historical branch; the branch set only grows, and each is a path that must stay tested",
+   "measured": "on a positional codec, 4 of 9 changes are IMPOSSIBLE and unknown-field retention is structurally unavailable, so the envelope is the only remaining option rather than a preference",
+   "measured_on": {
+    "what": "required_deploy_order + read_modify_write",
+    "population": "positional codec rows",
+    "n": 9
+   },
+   "limit": "not implemented in impl/ -- reasoned from the measured positional results rather than executed, and it is the one shape here without its own test.",
+   "evidence": "reasoned",
+   "generalizes": "The STRUCTURAL half generalizes completely: a positional codec cannot retain unknown fields, which is a property of the format and not of any fixture. That is why the envelope is the only remaining option rather than a stylistic preference. The 4-of-9 count is exact over the enumerated change set and will move if you enumerate differently."
+  },
+  {
+   "id": "S4",
+   "name": "Unknown-field retention on read-modify-write paths",
+   "implemented": true,
+   "when": "any reader reads a record, edits part of it, and writes it back -- which is the ordinary shape of almost every service",
+   "cost": "the reader must carry bytes it cannot interpret, and the codec must expose them",
+   "measured": "without retention every record loses the field: 1000 of 1000 on all three codecs, with zero errors raised. With retention on: 0 of 1000 on named and tagged. On positional it is STRUCTURALLY IMPOSSIBLE.",
+   "measured_on": {
+    "what": "read_modify_write, old reader edits status and writes back",
+    "population": "records carrying a field the reader does not know",
+    "n": 1000
+   },
+   "limit": "orthogonal to S1-S3 rather than an alternative: retention prevents loss on write-back and does nothing about a change being unsafe to deploy.",
+   "evidence": "executed",
+   "grounding": "simulator",
+   "generalizes": "GENERALIZES, because these are structural 0s and 1s rather than sampled rates. Without retention EVERY record loses the field (1000 of 1000, and yours will be all of them); with retention on a named or tagged codec NONE do (0 of 1000). Quoting these is safe precisely because they are 0 and 1 by construction. The positional impossibility is a property of the format. What does NOT transfer is the zero-errors-raised observation as reassurance: it means the loss is silent, not that it is rare."
+  }
+ ],
+ "rejected": [
+  {
+   "id": "R1",
+   "name": "Coordinate one simultaneous deploy of every reader and writer",
+   "why": "PEER, not worse. If you own every reader and can stop the world, this is genuinely correct and cheaper than three deploys. Rejected as a general answer because the measured asymmetry does not need it: 18 of 27 pairs are safe in either order and 3 more need only writers-first, so 21 of 27 require no coordination at all. Buying a stop-the-world for those is paying a large price for nothing.",
+   "evidence": "executed",
+   "grounding": "simulator"
+  },
+  {
+   "id": "R2",
+   "name": "Version the endpoint instead -- /v1, /v2 side by side",
+   "why": "PEER, and correct for a public HTTP API where consumers upgrade on their own schedule. Rejected for a storage contract because the records already written do not move to /v2: you still have one physical store holding both shapes, so the endpoint version relocates the problem without solving it, and now two code paths write to the same rows.",
+   "evidence": "reasoned"
+  },
+  {
+   "id": "R3",
+   "name": "Rely on the codec's tolerance -- 'unknown fields are ignored'",
+   "why": "WRONG, and the most common answer given. The premise is true and the conclusion does not follow: ignoring a field on the way in means omitting it on the way out. Measured at 1000 of 1000 records losing the field through an ordinary read-modify-write, with zero errors raised. Tolerance on arrival is not durability.",
+   "evidence": "executed",
+   "grounding": "simulator"
+  }
+ ],
+ "cost_model": {
+  "non_quantitative_because": "There is no cost tradeoff here to model. All nine changes are one schema edit plus one rolling deploy: they take the same time, need the same people and cost the same money. What separates them is whether the data survives, which is a correctness property and has no curve. Quantifying it would mean inventing a price for corruption in order to satisfy the shape of a cost model, and a decorative number is worse than an honest absence. The measurements that do exist are counts of outcomes -- 12 silently wrong cells of 54, 1000 of 1000 records lost -- and they live on solution_shapes and anti_patterns, where they describe consequences rather than prices.",
+  "constraints": [
+   {
+    "id": "C1",
+    "claim": "compatibility is not a property of a change; it is a property of a change against a codec. The same edit is safe on one wire format and silent corruption on another, and the codec does not appear in the schema diff.",
+    "evidence": "executed",
+    "grounding": "simulator"
+   },
+   {
+    "id": "C2",
+    "claim": "renaming a field and renumbering a field are exact mirror images: each is completely safe on one codec and has no safe single-step deploy on the other. Advice of the form 'renaming is safe' is therefore wrong about half the time, and the diff does not say which half.",
+    "evidence": "executed",
+    "grounding": "simulator"
+   },
+   {
+    "id": "C3",
+    "claim": "broken cells overwhelmingly fail SILENTLY rather than loudly: the decode succeeds and the value is wrong. A loud failure is found in staging; a silent one is found in a reconciliation, if at all.",
+    "evidence": "executed",
+    "grounding": "simulator"
+   },
+   {
+    "id": "C4",
+    "claim": "a reader that does not know a field will drop it when it writes the record back, so an ordinary read-modify-write destroys data that arrived correctly. The read never fails and nothing is logged.",
+    "evidence": "executed",
+    "grounding": "production-data",
+    "SCOPED": "OVER-GENERAL as stated. A tag-keyed codec with unknown-field retention PRESERVES a field the reader does not know across read-modify-write; real protobuf was executed and the field survived. The drop is real only for codecs WITHOUT retention, such as a typed struct built from JSON. See the codec matrix entry under fleet grounding for the executed evidence. Note the card's own solution shape already recommends retention, so the card knew retention exists while this constraint asserted the drop as universal."
+   },
+   {
+    "id": "C5",
+    "claim": "narrowing a type is the only change whose safety depends on the VALUES rather than the schemas, which is why a schema-registry compatibility check cannot detect it -- the information required is absent from its input, not from its logic.",
+    "evidence": "executed",
+    "grounding": "simulator"
+   },
+   {
+    "id": "C6",
+    "claim": "some changes have no safe deploy order at all. That is a different statement from 'be careful about ordering': no sequence of two deploys is safe, so the change must be decomposed into more of them.",
+    "evidence": "executed",
+    "grounding": "simulator"
+   },
+   {
+    "id": "C7",
+    "claim": "the asymmetry between the two orders is structural: a reader that does not understand a field can ignore it, whereas a writer that omits a field a reader requires cannot be tolerated. So writers-first is sometimes safe and readers-first never is, for these nine changes.",
+    "evidence": "executed",
+    "grounding": "simulator"
+   },
+   {
+    "id": "C8",
+    "claim": "a codec is a property of the READER, not of the file. A CSV with a header row is name-keyed when parsed by csv.DictReader or pandas.read_csv, and POSITIONAL when parsed by csv.reader, split(','), awk, or a warehouse COPY -- which is positional by default. Measured on byte-identical wire, reorder_fields is 'either' for a header reader and IMPOSSIBLE for a positional one, while rename_field is exactly inverted: the two readers are precise mirrors of each other WITHIN one file format. So C2's rename/renumber mirror is not a JSON-versus-protobuf fact; it is a fact about what the reader keys on, and the wire format only constrains which readers are possible. One verdict cannot describe a CSV: the same export is simultaneously safe for one consumer and silently corrupting for another, from a single change, with nothing in the file to distinguish them. Enumerate READERS, not formats.",
+    "evidence": "executed",
+    "grounding": "simulator",
+    "generalizes": "The STRUCTURE generalizes completely and is the point: any format whose identity can be resolved two ways -- CSV, a positional-or-named tuple encoding, a columnar file read by index versus by name -- has no single compatibility verdict, only one per reader. That is not a property of this fixture. What does NOT transfer is the list of tools in impl/readers.py READER_TAXONOMY, which is a mapping onto real APIs and is reasoned, not measured: verify your own reader rather than trusting the table."
+   }
+  ],
+  "breakpoints": [
+   {
+    "at": 1,
+    "unit": "readers you do not control",
+    "what": "at one such reader, the contract can never be narrowed again and S2 stops being a preference. Below that, S1 remains available because you can finish the contract phase."
+   },
+   {
+    "at": 2,
+    "unit": "schema versions live at once",
+    "what": "the entire problem exists only above one. At exactly one live version there is no direction to be compatible in, which is why staging proves nothing about a rolling deploy."
+   },
+   {
+    "at": 1,
+    "unit": "read-modify-write paths through a reader that lags the writer",
+    "what": "at one such path, S4 becomes mandatory regardless of which shape was chosen for the change itself. This is the threshold that a compatibility review does not look at."
+   },
+   {
+    "at": 1,
+    "unit": "removed fields whose number or offset is still reachable",
+    "what": "at one, the retired identifier must be reserved forever. Reuse is two individually reasonable commits that compose into corruption."
+   }
+  ]
+ },
+ "decomposition": {
+  "nodes": [
+   {
+    "n": 1,
+    "name": "Identify what the codec keys on",
+    "output": "one of: field name, field number, ordinal position"
+   },
+   {
+    "n": 2,
+    "name": "Enumerate live readers and writers, and who owns each",
+    "output": "the set of versions that will coexist, and which are outside your control"
+   },
+   {
+    "n": 3,
+    "name": "Classify the change against the matrix",
+    "output": "a verdict per direction: SAFE / HARD_FAIL / SILENT_WRONG"
+   },
+   {
+    "n": 4,
+    "name": "Derive the required deploy order",
+    "output": "either / writers / IMPOSSIBLE"
+   },
+   {
+    "n": 5,
+    "name": "Find read-modify-write paths",
+    "output": "the list of readers that write records back"
+   },
+   {
+    "n": 6,
+    "name": "Check value ranges against the new types",
+    "output": "count of live rows outside the narrowed domain"
+   },
+   {
+    "n": 7,
+    "name": "Reserve every retired name, number and offset",
+    "output": "a permanent do-not-reuse list"
+   },
+   {
+    "n": 8,
+    "name": "Choose the shape and sequence the deploys",
+    "output": "an ordered deploy plan with a backfill step if S1"
+   }
+  ],
+  "edges": [
+   {
+    "from": 1,
+    "to": 3,
+    "why": "the verdict is undefined without knowing what the codec keys on -- this is C1, and skipping node 1 is what makes 'is renaming safe?' look like a question with one answer"
+   },
+   {
+    "from": 2,
+    "to": 4,
+    "why": "who owns the readers decides whether the contract phase of S1 can ever run; an unowned reader turns S1 into S2 permanently"
+   },
+   {
+    "from": 3,
+    "to": 4,
+    "why": "the order is derived from the two direction verdicts rather than chosen, which is why IMPOSSIBLE is discoverable rather than a judgement"
+   },
+   {
+    "from": 4,
+    "to": 8,
+    "why": "the order constrains the plan; IMPOSSIBLE means the plan must contain more than one deploy of the same contract"
+   },
+   {
+    "from": 5,
+    "to": 8,
+    "why": "S4 is orthogonal and additive -- a safe change with an unprotected read-modify-write path still loses data, so this edge exists to stop node 4's verdict being read as the whole answer"
+   },
+   {
+    "from": 6,
+    "to": 3,
+    "why": "narrowing's verdict is data-dependent (C5), so node 3 cannot be completed from the schemas alone; this is the edge a schema registry does not have"
+   },
+   {
+    "from": 7,
+    "to": 8,
+    "why": "reservation is not part of this change, it is what protects the NEXT one -- the corruption comes from a later commit that reuses the identifier"
+   },
+   {
+    "from": 1,
+    "to": 5,
+    "why": "whether retention is even available is a codec property: keyed codecs can carry unknown bytes and a positional one cannot, so the same mitigation is free in one and impossible in another"
+   }
+  ]
+ },
+ "anti_patterns": [
+  {
+   "id": "A1",
+   "name": "Reusing a retired field number or column offset",
+   "symptom": "old records decode into a new field of a different type; the new field is populated for rows written before it existed",
+   "measured": "SILENT_WRONG in both directions on tagged and positional codecs; SAFE on a name-keyed codec, which is why the habit survives in teams that have only used JSON",
+   "measured_on": {
+    "what": "reuse_retired_tag: remove status at tag 4, then add shipment_id at tag 4",
+    "population": "3 codecs x 2 directions",
+    "n": 6
+   },
+   "fix": "reserve retired names, numbers and offsets permanently. Two individually defensible commits compose into corruption, so the guard must live in the schema, not in review memory.",
+   "evidence": "executed",
+   "grounding": "simulator"
+  },
+  {
+   "id": "A2",
+   "name": "Reordering or inserting fields in a positional format",
+   "symptom": "every field after the edit point is off by one and reads as a plausible value of the wrong column",
+   "measured": "reorder_fields and insert_in_middle are both SILENT_WRONG in both directions on positional, and both SAFE on named and tagged -- 4 corrupted cells that a review of the same diff would approve",
+   "measured_on": {
+    "what": "reorder_fields, insert_in_middle",
+    "population": "3 codecs x 2 directions each",
+    "n": 12
+   },
+   "fix": "append only, or move off positional. A tidy-up commit that alphabetises fields is a data-corrupting change in a positional format and looks like whitespace.",
+   "evidence": "executed",
+   "grounding": "simulator"
+  },
+  {
+   "id": "A3",
+   "name": "Renaming on a name-keyed codec, or renumbering on a tag-keyed one",
+   "symptom": "the field reads as its default everywhere, and rows where the real value happened to equal the default look correct",
+   "measured": "rename_field is SILENT_WRONG in both directions on named and SAFE on tagged; renumber_field is the exact mirror. Neither is recoverable by deploy ordering: both are IMPOSSIBLE.",
+   "measured_on": {
+    "what": "rename_field, renumber_field",
+    "population": "3 codecs x 2 directions each",
+    "n": 12
+   },
+   "fix": "on a name-keyed codec, treat a rename as expand/migrate/contract (S1). Never as a rename.",
+   "evidence": "executed",
+   "grounding": "simulator"
+  },
+  {
+   "id": "A4",
+   "name": "Read-modify-write through a reader that lags the writer",
+   "symptom": "a field is populated on write and empty later, with no error, no exception and no log line at any point",
+   "measured": "1000 of 1000 records lost the field, on all three codecs, with 0 raised. Unknown-field retention takes it to 0 of 1000 on named and tagged; on positional retention is STRUCTURALLY IMPOSSIBLE.",
+   "measured_on": {
+    "what": "old reader decodes a new record, edits status, re-encodes with the old schema",
+    "population": "simulated order records",
+    "n": 1000
+   },
+   "fix": "enable unknown-field retention on every reader that writes records back, or forbid read-modify-write on a lagging reader. 100% data loss at a 0% error rate is the worst available combination. DETECTION, added after three consecutive consumer runs prescribed this fix and none proposed a monitor -- because the card said the failure is invisible and then offered no way to see it. Nothing raises, so a counter is the only instrument: track FIELD-POPULATION RATE per field per writer version, and alarm on a fall rather than on an error. This is unusually easy to alarm on once you know to look, precisely because the loss is TOTAL by construction rather than a drift -- every record a lagging read-modify-write path touches loses the field, so the series is a cliff to zero on the affected slice, not a slow decline. Reconcile writes against reads on the same field over the same window; a field that is written and then absent is this anti-pattern and essentially nothing else.",
+   "evidence": "executed",
+   "grounding": "simulator",
+   "generalizes": "GENERALIZES as structure, not as a rate. 1000 of 1000 is total by construction: an old reader that cannot represent a field cannot write it back, so every record it touches loses it. Your figure is 100%, not 'about 100%'. Retention takes it to exactly 0 on named and tagged codecs and is STRUCTURALLY IMPOSSIBLE on positional. The 0-raised part is the danger, not the comfort: nothing in the pipeline will tell you."
+  },
+  {
+   "id": "A5",
+   "name": "Narrowing a type because current values fit",
+   "symptom": "a minority of rows -- reliably the largest ones -- hold wrapped or truncated values while every decode succeeds",
+   "measured": "100 of 1000 rows silently wrong with 0 raised, when only 10% of rows exceeded INT32_MAX. The single-record matrix reports narrow_type as SAFE on all three codecs, and both results are correct. That means a single-record test cannot see this class of loss, so the matrix must be read alongside a bulk run rather than instead of one.",
+   "measured_on": {
+    "what": "narrowing_loss, int64 -> int32, 10% of rows above the boundary",
+    "population": "simulated order amounts",
+    "n": 1000
+   },
+   "fix": "never narrow a live field; add a new one. And do not accept a schema-only compatibility verdict for a type change, because the values are not in its input.",
+   "evidence": "executed",
+   "grounding": "simulator",
+   "generalizes": "NOT as a rate, and this is the most over-quotable number in the card. 100 of 1000 is EXACTLY the 10% of rows the fixture placed above INT32_MAX: every out-of-range value was silently wrong and every in-range value was fine. So the transferable claim is total and conditional -- 100% of out-of-range values truncate silently and 0% raise -- while the observed 10% is purely the fixture's chosen mix. YOUR rate equals YOUR fraction of out-of-range values, which may be a thousand times smaller and is still unacceptable, because the wrong rows are reliably the largest ones. A consumer run quoted '100 of 1000 rows silently wrong' with this clause dropped, which reads as a 10% base rate and understates the conditional certainty. Establish your own range with MAX() over full retained history, not from a sample or a dashboard -- a silent minority of largest rows is exactly what sampling misses."
+  },
+  {
+   "id": "A6",
+   "name": "Adding a required field with no default",
+   "symptom": "a hard decode error on every record written by an older writer, immediately, in staging",
+   "measured": "HARD_FAIL forward on all three codecs, SAFE backward. It is the ONLY change of the nine that fails loudly, and therefore the only one that is genuinely cheap to get wrong.",
+   "measured_on": {
+    "what": "add_required_no_default",
+    "population": "3 codecs x 2 directions",
+    "n": 6
+   },
+   "fix": "give it a default, or add it as optional and enforce presence in application code. Listed here as the counter-example: this is what a well-behaved incompatible change looks like, and it is the one people fear most.",
+   "evidence": "executed",
+   "grounding": "simulator"
+  },
+  {
+   "id": "A7",
+   "name": "Treating 'it parses' or 'the checker approved it' as compatibility",
+   "symptom": "a green compatibility check, a clean deploy, flat error rates, and a reconciliation that does not balance",
+   "measured": "12 of 15 broken cells (0.80) decode successfully into a wrong value rather than raising. Of the 3 that raise, all 3 are the same change (A6). That means the absence of an exception is nearly uninformative here, so never read a clean decode as evidence of compatibility.",
+   "measured_on": {
+    "what": "verdict_mix over the full matrix",
+    "population": "9 changes x 3 codecs x 2 directions",
+    "n": 54
+   },
+   "fix": "test both directions with real records, and assert values rather than the absence of exceptions. A test that only checks 'no error was raised' cannot see 80% of the failures in this table. That means value assertions rather than exception assertions are what license a compatibility claim.",
+   "evidence": "executed",
+   "grounding": "simulator",
+   "generalizes": "EXACT over this enumeration, and NOT a universal probability. 12 of 15 (0.80) is a property of the 9 changes x 3 codecs x 2 directions chosen here; it must not be read as '80% of schema breakage is silent' in general. What generalizes is the qualitative result, which is strong enough on its own: silence is the DOMINANT failure mode, so a test asserting only that no exception was raised is blind to most of this table. Note also that all 3 raising cells are the same change (A6) -- the exceptions are concentrated, not distributed."
+  },
+  {
+   "id": "A8",
+   "name": "Trusting a header row to make a text format name-keyed",
+   "symptom": "a column reorder is reviewed as a tidy-up and approved because 'the file has a header', and one downstream consumer's numbers shift while every other consumer is fine",
+   "measured": "on byte-identical CSV wire, reorder_fields is SAFE in both directions for a header-parsing reader and SILENT_WRONG in both directions for a position-parsing one -- IMPOSSIBLE, so no deploy ordering exists for that consumer. rename_field is exactly inverted. The header is present in the bytes in every one of these cases; it protects only the readers that read it.",
+   "measured_on": {
+    "what": "the same CSV export decoded by a header reader and a positional reader",
+    "population": "reorder_fields, rename_field, remove_field, add_optional x 2 readers x 2 directions",
+    "n": 16
+   },
+   "fix": "enumerate the READERS of the artifact and classify each one, then take the WORST verdict across them -- a single export has as many compatibility answers as it has kinds of consumer. Warehouse bulk loaders and shell pipelines are the ones that surprise people. If you cannot enumerate the readers, you cannot classify the change, and that is the escalation exit rather than a reason to assume the header saves you.",
+   "evidence": "executed",
+   "grounding": "simulator",
+   "generalizes": "GENERALIZES as structure. The mirror is exact and by construction: reordering destroys offsets while preserving names, and renaming does the reverse, so any two readers keying on those two things must disagree on exactly those two changes. Your figures are also 'either' and 'IMPOSSIBLE', not approximations. The taxonomy of which real tool is which is reasoned and must be checked against your own code."
+  }
+ ],
+ "escalation": [
+  {
+   "symptom": "you cannot determine what the codec keys on",
+   "action": "stop. Do not classify the change. Write a record with the old schema, decode it with a candidate new one, and compare values -- 20 lines, and it settles C1 empirically."
+  },
+  {
+   "symptom": "the matrix says IMPOSSIBLE and you cannot run three deploys",
+   "action": "adopt S3 (versioned envelope) and accept the permanent branch, or do not make the change. Do not attempt to order two deploys cleverly: no ordering exists."
+  },
+  {
+   "symptom": "the change is safe but a reader performs read-modify-write and retention is unavailable",
+   "action": "the reader must stop writing whole records. Route the edit through a writer that holds the current schema, or make the update field-scoped rather than record-scoped."
+  },
+  {
+   "symptom": "you need to know how many live rows exceed a narrowed type and cannot query them",
+   "action": "do not narrow. C5 makes this undecidable from the schemas, and A5 shows the failure is a silent minority -- exactly the shape that a sample misses."
+  },
+  {
+   "symptom": "the contract is positional and you need any structural change at all",
+   "action": "leave this card. The decision is now whether to migrate off a positional format, which is a data-migration problem and not a compatibility one."
+  },
+  {
+   "symptom": "the record has an identity and retries may deliver it twice",
+   "action": "leave this card for PC-0003. Field identity and request identity are different problems, and this card says nothing about the second."
+  },
+  {
+   "symptom": "two writers legitimately disagree about the current schema version",
+   "action": "leave this card. That is a coordination and consensus problem, and compatibility rules cannot resolve a disputed source of truth."
+  },
+  {
+   "symptom": "you cannot enumerate the readers of a persisted artifact",
+   "action": "stop. You cannot classify the change, because the codec is a property of the reader (C8) and you do not know the readers. A header row is not evidence that anyone parses by name. Enumerate the consumers first, or treat the artifact as positional, which is the worst case and the safe assumption."
+  }
+ ],
+ "related_cards": [
+  {
+   "id": "PC-0003",
+   "relation": "composes_with",
+   "why": "PC-0003 asks whether two REQUESTS are the same operation; this card asks whether two SCHEMAS name the same field. Both turn on an identity that is not present in the bytes -- a client token there, a field identity here -- and in both the failure is a successful operation with the wrong effect rather than an error. A retried write through a lagging reader is simultaneously an idempotency problem and an A4 problem, and fixing one does not touch the other."
+  },
+  {
+   "id": "PC-0002",
+   "relation": "composes_with",
+   "why": "PC-0002 measured 100% cache staleness when the key omitted any of 7 identity fields, which is this card's C1 in a different domain: a value is only retrievable by the identity it was stored under. There the identity is a cache key you construct; here it is a field identity the codec chooses for you, which is why the same class of bug is invisible in a schema diff."
+  }
+ ],
+ "cited_evidence": [
+  {
+   "path": "problem-cards/run_scenarios.py (self; experiment tooling not shipped in this edition)",
+   "what": "cmd_record migrates a scenario's single `observed` object into an `observed_history` list on first write: `if \"observed\" in s and \"observed_history\" not in s: s[\"observed_history\"] = [s.pop(\"observed\")]`",
+   "why_it_matters": "A live expand/migrate step (S1) on a name-keyed codec, in this repository. It is exactly the shape the card recommends -- the new field is added, the old value is moved into it, and the old key is then absent -- and it exists because an earlier version dropped the first run when a second was recorded, taking runs-recorded from 2 to 1.",
+   "honest_limit": "SELF-CITATION, and it must be read as one: the path is inside problem-cards/, so this is my own harness, written in the same sessions as the card. It provides ZERO independent corroboration and the gate correctly excludes it from the external set -- PC-0004 therefore rests entirely on claim_strength='direction'. Kept because it is a genuine and checkable ILLUSTRATION of the migrate step on a name-keyed codec, not because it is evidence. Beyond that: a one-way migration of a single field in a file with one writer, not a rolling deploy with concurrent versions, and it demonstrates nothing about the deploy-ordering results, which are simulated.",
+   "evidence": "cited",
+   "unshipped": true
+  }
+ ],
+ "tests": {
+  "count": 37
+ },
+ "authoring": {
+  "measure_first": true,
+  "note": "Three measurements were discarded as fixture artifacts before anything was written. (1) rename_field measured SAFE on a name-keyed codec because the fixture set currency=\"USD\", the field's own default -- so a completely lost field returned a value equal to the real one. (2) renumber_field measured SAFE on tagged for the same reason. (3) narrow_type measured SAFE on all three codecs with 0/1000 rows wrong because the oracle computed its expected value by coercing through the READER's type, comparing the truncation against itself. All three are now regression-tested. The third is the sharpest: an oracle that applies the transformation under test to its own expectation cannot fail, and reports that inability as a pass."
+ },
+ "claim_strength": "direction"
+}
