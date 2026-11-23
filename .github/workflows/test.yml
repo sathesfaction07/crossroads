@@ -1,0 +1,49 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.11", "3.12"]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # No runtime dependencies by design: every [executed] claim must reproduce with the
+      # standard library alone. Only the linter is installed.
+      - name: Install
+        run: pip install ruff
+
+      - name: Lint
+        run: ruff check .
+
+      - name: The gate's own tests
+        run: python -m unittest test_validate_cards.py
+
+      - name: The depth gate over every card
+        run: python validate_cards.py --strict
+
+      - name: Public-edition scan (leaks, links, executed-to-test mapping)
+        run: python check_public_edition.py
+
+      - name: Every [executed] claim, re-run per card
+        run: |
+          for card in cards/*/; do
+            echo "== $card"
+            (cd "$card" && python -m unittest discover -s tests -t .) || exit 1
+          done
