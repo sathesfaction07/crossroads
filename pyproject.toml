@@ -14,3 +14,10 @@ dev = ["pytest>=8.0", "ruff>=0.6"]
 [tool.ruff]
 target-version = "py311"
 line-length = 100
+# cards/ holds the executed evidence: each card records its files' line counts and the
+# validator checks them, so reformatting that code would silently break the cards' claims.
+extend-exclude = ["cards"]
+
+[tool.ruff.lint]
+# Pinned, so the result does not move with ruff's default rule set between releases.
+select = ["E", "F", "I", "W"]

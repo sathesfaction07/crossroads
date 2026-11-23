@@ -73,7 +73,7 @@ python3 validate_cards.py --strict     # the depth gate: 12 sections, generated 
                                        # resolving decomposition edges, evidence vocab
 python3 check_public_edition.py        # leak scan, link resolution,
                                        # every [executed] claim maps to a shipping test
-python3 -m unittest test_validate_cards.py   # 106 tests on the gate itself
+python3 -m unittest test_validate_cards.py   # 109 tests on the gate itself
 ```
 
 The schema and its rationale — why every rule is a gate rather than a guideline, with the

@@ -50,10 +50,10 @@ from __future__ import annotations
 
 import ast
 import glob
+import hashlib
 import json
 import os
 import re
-import hashlib
 import subprocess
 import sys
 
@@ -392,26 +392,27 @@ def validate(card_dir: str) -> tuple[list[str], list[str], dict]:
     # whether the card states what the value LICENSES. They are different failures and a number can
     # have one without the other.
     #
-    # The incident: on the sonnet SC-04 control experiment the card arm lost TWO pre-registered rubric
-    # items to exactly this, on a card whose numbers were all present and correct.
+    # The incident: on the sonnet SC-04 control experiment the card arm lost TWO pre-registered
+    # rubric items to exactly this, on a card whose numbers were all present and correct.
     #   D1 needed "suppression's saving is SMALL, so deletion is the volume lever". The card said
     #      "saves 0.37 pages/week" and NOWHERE said 0.37 was small, or what followed from it. Zero
     #      hits for 'volume lever', 'negligible', 'deletion dominates'.
     #   D4 needed "the cost is small BY NATURE, which is why it always looks anecdotal". 0.0588
     #      appears three times as a bare value and is never once interpreted.
-    # Meanwhile D2 was WON because C4's finding is paired with its inference in R2.why ("any specific
-    # N would be fabricated") and A7.fix ("budget the page rate against capacity, not the alarm
-    # count"). Same card, same consumer, same run: interpreted numbers transferred, bare ones did not.
+    # Meanwhile D2 was WON because C4's finding is paired with its inference in R2.why ("any
+    # specific N would be fabricated") and A7.fix ("budget the page rate against capacity, not the
+    # alarm count"). Same card, same consumer, same run: interpreted numbers transferred, bare ones
+    # did not.
     #
-    # I first diagnosed those misses as a TRANSMISSION failure and predicted the cause was structural
-    # burial. Measurement refuted that -- the missed items sat EARLIER in their fields than the
-    # transmitted ones, and two of them were the entire content of their field. The mechanism is not
-    # position, it is the absence of a conclusion.
+    # I first diagnosed those misses as a TRANSMISSION failure and predicted the cause was
+    # structural burial. Measurement refuted that -- the missed items sat EARLIER in their fields
+    # than the transmitted ones, and two of them were the entire content of their field. The
+    # mechanism is not position, it is the absence of a conclusion.
     #
-    # WARN, not error, and deliberately so: the marker set is generous, so it over-credits prose that
-    # merely contains "so", and it cannot judge whether an inference is CORRECT. That makes a LOW
-    # ratio strong evidence and a high one weak evidence -- an asymmetry a reader must know about.
-    # Portfolio at introduction: 39/69 = 57%, worst PC-0005 at 41%, best PC-0004 at 83%.
+    # WARN, not error, and deliberately so: the marker set is generous, so it over-credits prose
+    # that merely contains "so", and it cannot judge whether an inference is CORRECT. That makes a
+    # LOW ratio strong evidence and a high one weak evidence -- an asymmetry a reader must know
+    # about. Portfolio at introduction: 39/69 = 57%, worst PC-0005 at 41%, best PC-0004 at 83%.
     #
     # INSTRUMENT BUG #17, found by running this check against the two elements that motivated it.
     # The first version asked "does this ELEMENT contain any decision language?" and BOTH S3 and A4
@@ -421,9 +422,9 @@ def validate(card_dir: str) -> tuple[list[str], list[str], dict]:
     # `must_cite_do_not_use_when`. Element-level presence is the wrong granularity.
     #
     # Now per-NUMBER: every numeric token must have decision language within PROXIMITY characters.
-    # That is the property actually wanted -- "this value is interpreted" -- rather than "this element
-    # mentions a decision somewhere". Verified by reverting S3 and A4 to their pre-fix text and
-    # confirming both are now flagged, then restoring byte-identically.
+    # That is the property actually wanted -- "this value is interpreted" -- rather than "this
+    # element mentions a decision somewhere". Verified by reverting S3 and A4 to their pre-fix text
+    # and confirming both are now flagged, then restoring byte-identically.
     PROXIMITY = 220
     inference_re = re.compile(
         r"\b(so |therefore|which means|that means|do not |never |prefer |instead of|is small|"
@@ -437,8 +438,14 @@ def validate(card_dir: str) -> tuple[list[str], list[str], dict]:
             continue
         naked = []
         for fval in [v for k, v in el.items() if isinstance(v, str) and k != "id"]:
-            if not inference_re.search(fval):
-                naked += numeric_re.findall(fval)
+            # Per NUMBER, as described above: decision language must sit within PROXIMITY
+            # characters of each number. (This loop used to test the whole field, so one
+            # "therefore" anywhere in a long field licensed every number in it -- the
+            # field-level version of the element-level defect this check was built to fix.)
+            for num in numeric_re.finditer(fval):
+                window = fval[max(0, num.start() - PROXIMITY) : num.end() + PROXIMITY]
+                if not inference_re.search(window):
+                    naked.append(num.group())
         if naked:
             warns.append(
                 f"{name}: {kind} {el.get('id')} has {len(naked)} number(s) in a field with no "

@@ -9,8 +9,8 @@ Run:  python3 -m unittest test_validate_cards -v
 """
 from __future__ import annotations
 
-import importlib.util
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -144,7 +144,7 @@ def _card(tmp: str, *, md_extra: str = "", meta_over: dict | None = None,
     scen.update(scen_over or {})
     Path(d, "scenarios.json").write_text(json.dumps(scen), encoding="utf-8")
 
-    Path(d, "tests", "__init__.py").write_text("")
+    Path(d, "tests", "__init__.py").write_text("", encoding="utf-8")
     assertion = "self.assertTrue(True)" if tests_pass else "self.assertTrue(False)"
     cases = "\n".join(f"    def test_{i}(self):\n        {assertion}\n"
                       for i in range(n_tests))
@@ -172,9 +172,9 @@ class TestGateFires(unittest.TestCase):
     def test_missing_section_is_an_error(self):
         with tempfile.TemporaryDirectory() as tmp:
             d = _card(tmp)
-            md = Path(d, "CARD.md").read_text()
+            md = Path(d, "CARD.md").read_text(encoding="utf-8")
             md = md.replace("## 10 · Anti-patterns", "## 10 · Something else")
-            Path(d, "CARD.md").write_text(md)
+            Path(d, "CARD.md").write_text(md, encoding="utf-8")
             errs, _, _ = VC.validate(d)
             self.assertTrue(any("Anti-patterns" in e for e in errs), errs)
 
@@ -182,9 +182,9 @@ class TestGateFires(unittest.TestCase):
         """The 30-char decay: a heading with nothing under it must not pass."""
         with tempfile.TemporaryDirectory() as tmp:
             d = _card(tmp)
-            md = Path(d, "CARD.md").read_text()
+            md = Path(d, "CARD.md").read_text(encoding="utf-8")
             md = md.replace("x" * 260, "thin", 1)
-            Path(d, "CARD.md").write_text(md)
+            Path(d, "CARD.md").write_text(md, encoding="utf-8")
             errs, _, _ = VC.validate(d)
             self.assertTrue(any("below the" in e for e in errs), errs)
 
@@ -218,8 +218,9 @@ class TestGateFires(unittest.TestCase):
         """
         with tempfile.TemporaryDirectory() as tmp:
             d = _card(tmp, meta_over={"solution_shapes": [{"id": "A", "implemented": True}]})
-            md = Path(d, "CARD.md").read_text().replace("### Shape B \u2014 b\n", "")
-            Path(d, "CARD.md").write_text(md)
+            md = Path(d, "CARD.md").read_text(encoding="utf-8")
+            md = md.replace("### Shape B \u2014 b\n", "")
+            Path(d, "CARD.md").write_text(md, encoding="utf-8")
             errs, _, _ = VC.validate(d)
             joined = " | ".join(errs)
             self.assertIn("1 solution shape(s); >=2 required", joined)
@@ -305,7 +306,7 @@ class TestGateFires(unittest.TestCase):
     def test_malformed_card_json_is_reported_not_crashed(self):
         with tempfile.TemporaryDirectory() as tmp:
             d = _card(tmp)
-            Path(d, "card.json").write_text("{not json")
+            Path(d, "card.json").write_text("{not json", encoding="utf-8")
             errs, _, _ = VC.validate(d)
             self.assertTrue(any("not valid JSON" in e for e in errs), errs)
 
@@ -337,17 +338,17 @@ class TestTwinConsistency(unittest.TestCase):
         """The exact defect that shipped."""
         with tempfile.TemporaryDirectory() as tmp:
             d = _card(tmp, n_tests=1)
-            md = Path(d, "CARD.md").read_text().replace("| **Tests** | 1 |",
+            md = Path(d, "CARD.md").read_text(encoding="utf-8").replace("| **Tests** | 1 |",
                                                         "| **Tests** | 30 |")
-            Path(d, "CARD.md").write_text(md)
+            Path(d, "CARD.md").write_text(md, encoding="utf-8")
             errs, _, _ = VC.validate(d)
             self.assertTrue(any("header says 30" in e for e in errs), errs)
 
     def test_missing_header_cell_warns_rather_than_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
             d = _card(tmp)
-            md = Path(d, "CARD.md").read_text().replace("| **Tests** | 1 |", "")
-            Path(d, "CARD.md").write_text(md)
+            md = Path(d, "CARD.md").read_text(encoding="utf-8").replace("| **Tests** | 1 |", "")
+            Path(d, "CARD.md").write_text(md, encoding="utf-8")
             errs, warns, _ = VC.validate(d)
             self.assertEqual(errs, [])
             self.assertTrue(any("no '**Tests**" in w for w in warns), warns)
@@ -461,10 +462,10 @@ class TestScenarios(unittest.TestCase):
         looked current against a materially different consumer input."""
         with tempfile.TemporaryDirectory() as tmp:
             d = _card(tmp)
-            sc = json.loads(Path(d, "scenarios.json").read_text())
+            sc = json.loads(Path(d, "scenarios.json").read_text(encoding="utf-8"))
             sc["scenarios"][0]["observed"]["conditions"]["card_state_at_run"] = {
                 "card_json_sha256": "deadbeefcafe"}
-            Path(d, "scenarios.json").write_text(json.dumps(sc))
+            Path(d, "scenarios.json").write_text(json.dumps(sc), encoding="utf-8")
             errs, warns, stats = VC.validate(d)
             self.assertEqual(errs, [])
             self.assertTrue(any("deadbeefcafe" in w and "historical record" in w
@@ -479,9 +480,9 @@ class TestScenarios(unittest.TestCase):
             d = _card(tmp)
             _, _, before = VC.validate(d)
             self.assertEqual(before["runs_current"], 2)
-            meta = json.loads(Path(d, "card.json").read_text())
+            meta = json.loads(Path(d, "card.json").read_text(encoding="utf-8"))
             meta["cost_model"]["breakpoints"][0]["unit"] = "items (N) -- clarified"
-            Path(d, "card.json").write_text(json.dumps(meta))
+            Path(d, "card.json").write_text(json.dumps(meta), encoding="utf-8")
             _, warns, after = VC.validate(d)
             self.assertEqual(after["runs_current"], 0,
                              "editing card.json must invalidate every prior run")
@@ -494,10 +495,10 @@ class TestScenarios(unittest.TestCase):
         accumulating comparable runs must count all of them."""
         with tempfile.TemporaryDirectory() as tmp:
             d = _card(tmp)
-            sc = json.loads(Path(d, "scenarios.json").read_text())
+            sc = json.loads(Path(d, "scenarios.json").read_text(encoding="utf-8"))
             first = sc["scenarios"][0].pop("observed")
             sc["scenarios"][0]["observed_history"] = [first, json.loads(json.dumps(first))]
-            Path(d, "scenarios.json").write_text(json.dumps(sc))
+            Path(d, "scenarios.json").write_text(json.dumps(sc), encoding="utf-8")
             errs, warns, stats = VC.validate(d)
             self.assertEqual(errs, [])
             self.assertFalse(any("no recorded run" in w for w in warns), warns)
@@ -513,9 +514,9 @@ class TestScenarios(unittest.TestCase):
         independent of whether anything later would have crashed."""
         with tempfile.TemporaryDirectory() as tmp:
             d = _card(tmp)
-            sc = json.loads(Path(d, "scenarios.json").read_text())
+            sc = json.loads(Path(d, "scenarios.json").read_text(encoding="utf-8"))
             sc["scenarios"][0]["observed"] = {"result": "pass"}
-            Path(d, "scenarios.json").write_text(json.dumps(sc))
+            Path(d, "scenarios.json").write_text(json.dumps(sc), encoding="utf-8")
             errs, _, stats = VC.validate(d)          # must not raise
             self.assertTrue(any("has a recorded result but no `conditions`" in e
                                 for e in errs), errs)
@@ -536,10 +537,10 @@ class TestScenarios(unittest.TestCase):
         baseline, however current the card.json hash is."""
         with tempfile.TemporaryDirectory() as tmp:
             d = _card(tmp)
-            sc = json.loads(Path(d, "scenarios.json").read_text())
+            sc = json.loads(Path(d, "scenarios.json").read_text(encoding="utf-8"))
             sc["scenarios"][0]["observed"]["conditions"]["consumer_prior_exposure"] = (
                 "UNVERIFIED -- spawned inside the authoring conversation")
-            Path(d, "scenarios.json").write_text(json.dumps(sc))
+            Path(d, "scenarios.json").write_text(json.dumps(sc), encoding="utf-8")
             errs, warns, stats = VC.validate(d)
             self.assertEqual(errs, [])
             self.assertTrue(any("prior exposure" in w and "not counted as a naive baseline"
@@ -618,16 +619,16 @@ class TestSyncCounts(unittest.TestCase):
         """The count is stated in the header, in card.json, and in reality. Reality wins."""
         with tempfile.TemporaryDirectory() as tmp:
             d = _card(tmp, n_tests=3)
-            md = Path(d, "CARD.md").read_text().replace("| **Tests** | 3 |",
+            md = Path(d, "CARD.md").read_text(encoding="utf-8").replace("| **Tests** | 3 |",
                                                         "| **Tests** | 99 |")
-            Path(d, "CARD.md").write_text(md)
-            meta = json.loads(Path(d, "card.json").read_text())
+            Path(d, "CARD.md").write_text(md, encoding="utf-8")
+            meta = json.loads(Path(d, "card.json").read_text(encoding="utf-8"))
             meta["tests"] = {"count": 77, "passing": True}
-            Path(d, "card.json").write_text(json.dumps(meta))
+            Path(d, "card.json").write_text(json.dumps(meta), encoding="utf-8")
 
             self.assertTrue(VC.sync_counts(d))
-            self.assertIn("| **Tests** | 3 |", Path(d, "CARD.md").read_text())
-            after = json.loads(Path(d, "card.json").read_text())
+            self.assertIn("| **Tests** | 3 |", Path(d, "CARD.md").read_text(encoding="utf-8"))
+            after = json.loads(Path(d, "card.json").read_text(encoding="utf-8"))
             self.assertEqual(after["tests"]["count"], 3)
             self.assertNotIn("passing", after["tests"],
                              "a hand-kept 'passing' boolean can only ever be wrong")
@@ -642,7 +643,7 @@ class TestSyncLedger(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             d = _card(tmp, md_extra="\n## 12 · Evidence ledger\n| `[executed]` | 999 | x |\n")
             self.assertTrue(VC.sync_ledger(d))
-            md = Path(d, "CARD.md").read_text()
+            md = Path(d, "CARD.md").read_text(encoding="utf-8")
             actual = VC.count_evidence(md)["executed"]
             self.assertIn(f"| `[executed]` | {actual} |", md)
             self.assertFalse(VC.sync_ledger(d), "second run must be a no-op")
@@ -666,14 +667,12 @@ class TestGeneratedCostTable(unittest.TestCase):
         self._tmp.cleanup()
 
     def _add_markers(self, body: str = "\n| bogus | 1 |\n"):
-        md = Path(self.d, "CARD.md").read_text()
+        md = Path(self.d, "CARD.md").read_text(encoding="utf-8")
         Path(self.d, "CARD.md").write_text(
-            md + "\n" + VC.COST_BEGIN + body + VC.COST_END + "\n")
+            md + "\n" + VC.COST_BEGIN + body + VC.COST_END + "\n", encoding="utf-8")
 
     def test_the_table_is_computed_from_the_filesystem(self):
         table = VC.cost_table()
-        impl = sum(1 for _ in open(os.path.join(self.d, "impl.py"))) if os.path.exists(
-            os.path.join(self.d, "impl.py")) else 0
         self.assertIn("| `CARD.md` |", table)
         self.assertIn("| doc-to-code |", table)
         md_lines = sum(1 for _ in open(os.path.join(self.d, "CARD.md"), encoding="utf-8"))
@@ -728,7 +727,7 @@ class TestRelatedCards(unittest.TestCase):
         self._tmp.cleanup()
 
     def _run(self, related):
-        meta = json.loads(Path(self.d, "card.json").read_text())
+        meta = json.loads(Path(self.d, "card.json").read_text(encoding="utf-8"))
         meta["related_cards"] = related
         Path(self.d, "card.json").write_text(json.dumps(meta), encoding="utf-8")
         errs, warns, _ = VC.validate(self.d)
@@ -802,7 +801,7 @@ class TestRelatedCards(unittest.TestCase):
     def test_all_card_ids_survives_an_unreadable_card(self):
         """One corrupt card must not make every OTHER card's edges look dangling -- that
         would turn one defect into an error on every card in the portfolio."""
-        Path(VC.CARDS, "PC-8888-other", "card.json").write_text("{ not json")
+        Path(VC.CARDS, "PC-8888-other", "card.json").write_text("{ not json", encoding="utf-8")
         self.assertEqual(VC.all_card_ids(), {"PC-9999"})
 
 
@@ -1293,3 +1292,29 @@ class TestPortfolioWideFixedPoint(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestDecisionLanguageProximity(unittest.TestCase):
+    """The check promises PER-NUMBER proximity: decision language within PROXIMITY (220)
+    characters of each number. It used to test whole fields, so one "therefore" anywhere in a
+    long field licensed every number in it -- and `PROXIMITY` was assigned and never read.
+    The third test is the one that failed before the fix."""
+
+    def _naked(self, why: str) -> list[str]:
+        with tempfile.TemporaryDirectory() as tmp:
+            d = _card(tmp, meta_over={"anti_patterns": [
+                {"id": "A1", "name": "n", "why": why, "evidence": "executed"}]})
+            _, warns, _ = VC.validate(d)
+            return [w for w in warns if "no decision language" in w and "A1" in w]
+
+    def test_a_number_beside_decision_language_is_licensed(self):
+        self.assertEqual(self._naked("p99 is 12.5 ms, so do not page on it"), [])
+
+    def test_a_number_with_no_decision_language_is_flagged(self):
+        self.assertTrue(self._naked("p99 measured at 12.5 ms on the corpus"))
+
+    def test_a_distant_decision_word_does_not_license_a_number(self):
+        why = "therefore page on errors. " + "x" * 300 + " p99 measured at 12.5 ms"
+        flagged = self._naked(why)
+        self.assertTrue(flagged, "a decision word 300 characters away licensed the number")
+        self.assertIn("12.5", flagged[0])
