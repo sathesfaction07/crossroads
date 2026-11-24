@@ -47,7 +47,7 @@
     "population": "pc0002-fixture-corpus",
     "n": 2000
    },
-   "correction": "Previously published as 1.07 from a 30-document fixture. A consumer planning a 4M-document job REFUSED to size capacity on it, because every other number in this card comes from the 2000-document corpus. It was right: the 30-doc sample understates forward passes by 11%, and it is the low outlier of a converging series (1.067 / 1.120 / 1.196 / 1.184 at n=30/100/500/2000). That means a smoke-test sample understates cost and converges from below, so never size capacity from the smallest fixture in a series.",
+   "correction": "Previously published as 1.07 from a 30-document fixture, which means it was never a capacity figure. A consumer planning a 4M-document job REFUSED to size capacity on it, because every other number in this card comes from the 2000-document corpus. It was right: the 30-doc sample understates forward passes by 11%, and it is the low outlier of a converging series (1.067 / 1.120 / 1.196 / 1.184 at n=30/100/500/2000). That means a smoke-test sample understates cost and converges from below, so never size capacity from the smallest fixture in a series.",
    "smoke_test_only": "The 30-document pipeline figures -- 32 chunks, 10592 paid slots, 35.21% waste at batch 16 -- are an end-to-end smoke test of the composed pipeline, NOT a capacity estimate. Use the curve above for planning. That means these figures license a pass/fail on wiring and nothing about capacity, so do not put them in a sizing document.",
    "grounding": "synthetic-fixture"
   },
@@ -404,7 +404,7 @@
    "measured": "16.34% of tokens at window=512 on the fixture corpus -- that means tokens past the window are dropped with no error, so the loss cannot be detected from logs alone.",
    "evidence": "executed",
    "grounding": "synthetic-fixture",
-   "generalizes": "NO as a value. The loss rate is entirely a function of your document-length distribution against your window, and 16.34% is this fixture's. The SHAPE transfers: any corpus whose upper-tail length exceeds the window loses tokens silently, with no error and no warning. Compute your own rate from your token-length histogram -- that is what Phase 0 of Shape A is for, and it costs no GPU. That means your own token-length histogram, not this figure, is what licenses a window choice."
+   "generalizes": "NO as a value. The loss rate is entirely a function of your document-length distribution against your window, and 16.34% is this fixture's, so do not plan a window around it. The SHAPE transfers: any corpus whose upper-tail length exceeds the window loses tokens silently, with no error and no warning. Compute your own rate from your token-length histogram -- that is what Phase 0 of Shape A is for, and it costs no GPU. That means your own token-length histogram, not this figure, is what licenses a window choice."
   },
   {
    "id": "A2",
