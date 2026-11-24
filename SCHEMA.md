@@ -9,7 +9,7 @@ real internal code strengthens a point it is cited, but no card's value rests on
 
 ## Why every rule here is a gate, not a guideline
 
-Measured in the sibling 31-KB portfolio in this same workspace:
+Measured across a companion set of 31 knowledge bases:
 
 | Finding | Consequence for this schema |
 | --- | --- |
@@ -382,7 +382,7 @@ Tag every substantive claim:
 | `[cited]` | read from named real code, quoted | high — but see below |
 | `[reasoned]` | argued from the other two, **not independently verified** | **lowest — treat as hypothesis** |
 
-`[cited]` is *not* automatically safe. In the portfolio review, **every wrong row cited a
+`[cited]` is *not* automatically safe. In a review of those knowledge bases, **every wrong row cited a
 real file** — the path existed and the interpretation was wrong. Citing means "I read
 this", never "therefore my conclusion is right".
 
@@ -435,7 +435,7 @@ publishing a `measured` value with no `measured_on`.
 
 ### In CI — `--strict` only, never `--sync-ledger`
 
-Gate 7 of 8 in `portfolio_ci.sh` runs `--strict` and the gate's own 42 tests. **CI must
+This repository's CI runs `--strict` and the gate's own tests. **CI must
 never sync.** `sync` regenerates derived values from ground truth — an *authoring* action.
 A CI job that repairs drift instead of failing on it converts a correctness gate into a
 freshness gate, which is the precise confusion that let a false claim ship into all 31
@@ -488,5 +488,5 @@ string surgery":
   the wrong thing. This is why ≥1 is mandatory and not merely encouraged.
 - **Citing without reading.** Do not infer a fact about code from an index, a filename, or
   a search result. *An index is not the disk* — a real error made in the sibling review:
-  a package was declared "absent from the portfolio" when it was a subtree of the very
+  a package was declared "absent from every project" when it was a subtree of the very
   repo under discussion, in four places.
